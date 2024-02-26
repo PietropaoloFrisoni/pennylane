@@ -57,6 +57,8 @@ def _generator_prefactor(gen):
       of Pauli words.
     """
 
+    print(f"FRISUS LOG: _generator_prefactor called. gen={gen}, type(gen)={type(gen)}")
+
     prefactor = 1.0
 
     if isinstance(gen, Prod):
@@ -79,6 +81,7 @@ def _generator_prefactor(gen):
             return qml.dot(coeffs, ops), prefactor
 
     elif isinstance(gen, SProd):
+        print(f"FRISUS LOG: _generator_prefactor returning gen.base={gen.base}, gen.scalar={gen.scalar}")
         return gen.base, gen.scalar
 
     return gen, prefactor
