@@ -842,11 +842,11 @@ class TestCommutingFunction:
                 qml.PauliX(0) @ qml.Hadamard(1) @ qml.Identity(2),
                 "Prod",
             ),
-            # (
-            #    qml.PauliX(0) + qml.Hadamard(1) @ qml.Identity(2),
-            #    qml.PauliX(0) @ qml.PauliY(2),
-            #    "Sum",
-            # ),
+            (
+                qml.PauliX(0) + qml.Hadamard(1) @ qml.Identity(2),
+                qml.PauliX(0) @ qml.PauliY(2),
+                "Sum",
+            ),
             (
                 qml.PauliX(0) @ qml.PauliY(2),
                 qml.sum(qml.Hadamard(1), qml.PauliX(1) @ qml.Identity(2)),

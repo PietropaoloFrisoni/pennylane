@@ -368,22 +368,27 @@ def is_commuting(operation1, operation2, wire_map=None):
     if operation1.pauli_rep is not None and operation2.pauli_rep is not None:
         return _pword_is_commuting(operation1, operation2, wire_map)
 
-    # aside from Pauli words, commutation evaluation between the following instances are not supported
-    if isinstance(operation1, qml.operation.Tensor) or isinstance(operation2, qml.operation.Tensor):
-        # pylint: disable=raise-missing-from
-        raise qml.QuantumFunctionError("Tensor operations are not supported.")
+    for op in [operation1, operation2]:
 
-    if isinstance(operation1, SProd) or isinstance(operation2, SProd):
-        # pylint: disable=raise-missing-from
-        raise qml.QuantumFunctionError("SProd operations are not supported.")
+        # TODO: is there a way to remove this double check?
+        if is_pauli_word(op):
+            continue
 
-    if isinstance(operation1, Prod) or isinstance(operation2, Prod):
-        # pylint: disable=raise-missing-from
-        raise qml.QuantumFunctionError("Prod operations are not supported.")
+        elif isinstance(op, qml.operation.Tensor):
+            # pylint: disable=raise-missing-from
+            raise qml.QuantumFunctionError("Tensor operations are not supported.")
 
-    if isinstance(operation1, Sum) or isinstance(operation2, Sum):
-        # pylint: disable=raise-missing-from
-        raise qml.QuantumFunctionError("Sum operations are not supported.")
+        elif isinstance(op, SProd):
+            # pylint: disable=raise-missing-from
+            raise qml.QuantumFunctionError("SProd operations are not supported.")
+
+        elif isinstance(op, Prod):
+            # pylint: disable=raise-missing-from
+            raise qml.QuantumFunctionError("Prod operations are not supported.")
+
+        elif isinstance(op, Sum):
+            # pylint: disable=raise-missing-from
+            raise qml.QuantumFunctionError("Sum operations are not supported.")
 
     # operations are disjoints
     if not intersection(operation1.wires, operation2.wires):
