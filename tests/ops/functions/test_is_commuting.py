@@ -843,7 +843,7 @@ class TestCommutingFunction:
                 "Prod",
             ),
             (
-                qml.PauliX(0) + qml.Hadamard(1) @ qml.Identity(2),
+                qml.sum(qml.Hadamard(1), qml.PauliZ(0)),
                 qml.PauliX(0) @ qml.PauliY(2),
                 "Sum",
             ),
@@ -864,10 +864,11 @@ class TestCommutingFunction:
             ),
         ],
     )
-    def test_non_pauli_word_tensors_not_supported(self, pauli_word_1, pauli_word_2, op_type):
+    def test_non_pauli_word_ops_not_supported(self, pauli_word_1, pauli_word_2, op_type):
         """Ensure invalid inputs are handled properly when determining commutativity."""
         with pytest.raises(
-            qml.QuantumFunctionError, match=f"{op_type} operations are not supported."
+            qml.QuantumFunctionError,
+            match=f"{op_type} operations are only supported for Pauli words.",
         ):
             qml.is_commuting(pauli_word_1, pauli_word_2)
 

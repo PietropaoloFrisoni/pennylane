@@ -267,10 +267,7 @@ unsupported_operations = [
     "CommutingEvolution",
     "DisplacementEmbedding",
     "SqueezingEmbedding",
-    # "Prod",  # TODO: remove this
-    # "Sum",  # TODO: remove this
     "Exp",
-    # "SProd",  # TODO: remove this
 ]
 non_commuting_operations = [
     # StatePrepBase
@@ -322,6 +319,7 @@ non_commuting_operations = [
 
 def is_commuting(operation1, operation2, wire_map=None):
     r"""Check if two operations are commuting using a lookup table.
+    If one operation is a :class:`~.Sum`, the commutator is computed to evaluate if it is null.
 
     A lookup table is used to check the commutation between the
     controlled, targeted part of operation 1 with the controlled, targeted part of operation 2.
@@ -335,6 +333,8 @@ def is_commuting(operation1, operation2, wire_map=None):
 
         :class:`~.PauliRot`, :class:`~.QubitDensityMatrix`, :class:`~.CVNeuralNetLayers`,
         :class:`~.ApproxTimeEvolution`, :class:`~.ArbitraryUnitary`, :class:`~.CommutingEvolution`,
+        :class:`~.DisplacementEmbedding`, :class:`~.SqueezingEmbedding`
+        :class:`~.Exp`
         :class:`~.DisplacementEmbedding`, :class:`~.SqueezingEmbedding`
         :class:`~.Exp`
 
@@ -355,6 +355,21 @@ def is_commuting(operation1, operation2, wire_map=None):
     # pylint: disable=too-many-branches
     # pylint: disable=too-many-return-statements
 
+    def _check_operations(operation):
+        """Tensor, SProd, Prod, and Sum instances are only supported for Pauli words."""
+
+        if isinstance(operation, qml.operation.Tensor):
+            # pylint: disable=raise-missing-from
+            raise qml.QuantumFunctionError("Tensor operations are only supported for Pauli words.")
+
+        elif isinstance(operation, SProd):
+            # pylint: disable=raise-missing-from
+            raise qml.QuantumFunctionError("SProd operations are only supported for Pauli words.")
+
+        elif isinstance(operation, Prod):
+            # pylint: disable=raise-missing-from
+            raise qml.QuantumFunctionError("Prod operations are only supported for Pauli words.")
+
     if operation1.name in unsupported_operations or isinstance(
         operation1, (qml.operation.CVOperation, qml.operation.Channel)
     ):
@@ -368,28 +383,6 @@ def is_commuting(operation1, operation2, wire_map=None):
     if operation1.pauli_rep is not None and operation2.pauli_rep is not None:
         return _pword_is_commuting(operation1, operation2, wire_map)
 
-    for op in [operation1, operation2]:
-
-        # TODO: is there a way to remove this double check?
-        if is_pauli_word(op):
-            continue
-
-        elif isinstance(op, qml.operation.Tensor):
-            # pylint: disable=raise-missing-from
-            raise qml.QuantumFunctionError("Tensor operations are not supported.")
-
-        elif isinstance(op, SProd):
-            # pylint: disable=raise-missing-from
-            raise qml.QuantumFunctionError("SProd operations are not supported.")
-
-        elif isinstance(op, Prod):
-            # pylint: disable=raise-missing-from
-            raise qml.QuantumFunctionError("Prod operations are not supported.")
-
-        elif isinstance(op, Sum):
-            # pylint: disable=raise-missing-from
-            raise qml.QuantumFunctionError("Sum operations are not supported.")
-
     # operations are disjoints
     if not intersection(operation1.wires, operation2.wires):
         return True
@@ -399,8 +392,23 @@ def is_commuting(operation1, operation2, wire_map=None):
         operation1 = qml.simplify(operation1)
         operation2 = qml.simplify(operation2)
 
-    # Arithmetic non-disjoint operations only contain Pauli words
-    _check_opmath_operations(operation1, operation2)
+    # Check that Tensor, SProd, Prod, and Sum instances only contain Pauli words.
+    for op in [operation1, operation2]:
+
+        if is_pauli_word(op):
+            continue
+
+        elif isinstance(op, Sum):
+            for op_summand in op:
+                print(op_summand)
+                if not is_pauli_word(op_summand):
+                    raise qml.QuantumFunctionError(
+                        "Sum operations are only supported for Pauli words."
+                    )
+                _check_operations(op_summand)
+
+        else:
+            _check_operations(op)
 
     # Operation is in the non commuting list
     if operation1.name in non_commuting_operations or operation2.name in non_commuting_operations:
@@ -417,6 +425,11 @@ def is_commuting(operation1, operation2, wire_map=None):
     op_set = {"U2", "U3", "Rot", "CRot"}
     if operation1.name in op_set and operation2.name in op_set:
         return check_commutation_two_non_simplified_rotations(operation1, operation2)
+
+    # For Sum of Pauli words the commutator is evaluated.
+    # TODO: add some checks to see if it can be improved
+    if isinstance(operation1, Sum) or isinstance(operation2, Sum):
+        return qml.commutator(operation1, operation2) == 0
 
     ctrl_base_1 = _get_target_name(operation1)
     ctrl_base_2 = _get_target_name(operation2)
