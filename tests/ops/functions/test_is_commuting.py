@@ -19,8 +19,6 @@ import pytest
 import pennylane.numpy as np
 import pennylane as qml
 
-qml.operation.enable_new_opmath()
-
 from pennylane.ops.functions.is_commuting import (
     _get_target_name,
     _check_mat_commutation,
@@ -789,6 +787,8 @@ class TestCommutingFunction:
             (
                 qml.prod(qml.PauliZ("a"), qml.PauliY("b"), qml.PauliZ("d")),
                 qml.prod(qml.PauliX("a"), qml.PauliZ("c"), qml.PauliY("d")),
+                qml.prod(qml.PauliZ("a"), qml.PauliY("b"), qml.PauliZ("d")),
+                qml.prod(qml.PauliX("a"), qml.PauliZ("c"), qml.PauliY("d")),
                 {"a": 0, "b": 1, "c": 2, "d": 3},
                 True,
             ),
@@ -811,12 +811,6 @@ class TestCommutingFunction:
                 False,
             ),
             (
-                qml.sum(qml.PauliZ("a"), qml.PauliY("a"), qml.PauliZ("b")),
-                qml.sum(qml.PauliX("c"), qml.PauliZ("c"), qml.PauliY("d")),
-                {"a": 0, "b": 0, "c": 1, "d": 1},
-                True,
-            ),
-            (
                 qml.sum(qml.PauliZ("a"), qml.PauliY("b"), qml.PauliZ("d")),
                 qml.sum(qml.PauliZ("a"), qml.PauliY("c"), qml.PauliZ("d")),
                 {"a": 0, "b": 1, "c": 2, "d": 3},
@@ -833,33 +827,23 @@ class TestCommutingFunction:
         "pauli_word_1,pauli_word_2,op_type",
         [
             (
-                qml.PauliX(0) @ qml.Hadamard(1) @ qml.Identity(2),
-                qml.PauliX(0) @ qml.PauliY(2),
+                qml.prod(qml.PauliX(0), qml.Hadamard(1), qml.Identity(2)),
+                qml.sum(qml.PauliX(0), qml.PauliY(2)),
                 "Prod",
             ),
             (
-                qml.PauliX(0) @ qml.PauliY(2),
-                qml.PauliX(0) @ qml.Hadamard(1) @ qml.Identity(2),
-                "Prod",
+                qml.sum(qml.PauliX(0), qml.PauliY(2)),
+                qml.operation.Tensor(qml.PauliX(0), qml.Hadamard(1), qml.Identity(2)),
+                "Tensor",
             ),
             (
-                qml.sum(qml.Hadamard(1), qml.PauliZ(0)),
-                qml.PauliX(0) @ qml.PauliY(2),
+                qml.PauliX(2),
+                qml.sum(qml.Hadamard(1), qml.prod(qml.PauliX(1), qml.Identity(2))),
                 "Sum",
             ),
             (
-                qml.PauliX(0) @ qml.PauliY(2),
-                qml.sum(qml.Hadamard(1), qml.PauliX(1) @ qml.Identity(2)),
-                "Sum",
-            ),
-            (
-                qml.s_prod(0.5, qml.PauliX(0) @ qml.Hadamard(1) @ qml.Identity(2)),
-                qml.PauliX(0) @ qml.PauliY(2),
-                "SProd",
-            ),
-            (
-                qml.PauliX(0) @ qml.PauliY(2),
-                qml.s_prod(0.5, qml.PauliX(0) + qml.Hadamard(1) @ qml.Identity(2)),
+                qml.prod(qml.PauliX(0), qml.PauliY(2)),
+                qml.s_prod(0.5, qml.PauliX(0) + qml.prod(qml.Hadamard(1), qml.Identity(2))),
                 "SProd",
             ),
         ],

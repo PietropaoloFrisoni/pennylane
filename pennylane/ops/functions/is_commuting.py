@@ -163,15 +163,31 @@ _commutes = _create_commute_function()
 def _check_opmath_operations(operation1, operation2):
     """Check that `Tensor`, `SProd`, `Prod`, and `Sum` instances only contain Pauli words."""
 
+    def _check_single_opmath_operation(op):
+        if isinstance(op, qml.operation.Tensor):
+            raise qml.QuantumFunctionError("Tensor operations are only supported for Pauli words.")
+
+        if isinstance(op, SProd):
+            raise qml.QuantumFunctionError("SProd operations are only supported for Pauli words.")
+
+        if isinstance(op, Prod):
+            raise qml.QuantumFunctionError("Prod operations are only supported for Pauli words.")
+
     for op in [operation1, operation2]:
 
-        if op.pauli_rep is not None:
+        if is_pauli_word(op):
             continue
 
-        if isinstance(op, (qml.operation.Tensor, SProd, Prod, Sum)):
-            raise qml.QuantumFunctionError(
-                f"Operation {op} currently not supported. Tensor, Prod, Sprod, and Sum instances must have a valid Pauli representation."
-            )
+        if isinstance(op, Sum):
+            for op_summand in op:
+                if not is_pauli_word(op_summand):
+                    raise qml.QuantumFunctionError(
+                        "Sum operations are only supported for Pauli words."
+                    )
+                _check_single_opmath_operation(op_summand)
+
+        else:
+            _check_single_opmath_operation(op)
 
 
 def intersection(wires1, wires2):
@@ -355,21 +371,6 @@ def is_commuting(operation1, operation2, wire_map=None):
     # pylint: disable=too-many-branches
     # pylint: disable=too-many-return-statements
 
-    def _check_operations(operation):
-        """Tensor, SProd, Prod, and Sum instances are only supported for Pauli words."""
-
-        if isinstance(operation, qml.operation.Tensor):
-            # pylint: disable=raise-missing-from
-            raise qml.QuantumFunctionError("Tensor operations are only supported for Pauli words.")
-
-        elif isinstance(operation, SProd):
-            # pylint: disable=raise-missing-from
-            raise qml.QuantumFunctionError("SProd operations are only supported for Pauli words.")
-
-        elif isinstance(operation, Prod):
-            # pylint: disable=raise-missing-from
-            raise qml.QuantumFunctionError("Prod operations are only supported for Pauli words.")
-
     if operation1.name in unsupported_operations or isinstance(
         operation1, (qml.operation.CVOperation, qml.operation.Channel)
     ):
@@ -392,23 +393,8 @@ def is_commuting(operation1, operation2, wire_map=None):
         operation1 = qml.simplify(operation1)
         operation2 = qml.simplify(operation2)
 
-    # Check that Tensor, SProd, Prod, and Sum instances only contain Pauli words.
-    for op in [operation1, operation2]:
-
-        if is_pauli_word(op):
-            continue
-
-        elif isinstance(op, Sum):
-            for op_summand in op:
-                print(op_summand)
-                if not is_pauli_word(op_summand):
-                    raise qml.QuantumFunctionError(
-                        "Sum operations are only supported for Pauli words."
-                    )
-                _check_operations(op_summand)
-
-        else:
-            _check_operations(op)
+    # Arithmetic non-disjoint operations only contain Pauli words
+    _check_opmath_operations(operation1, operation2)
 
     # Operation is in the non commuting list
     if operation1.name in non_commuting_operations or operation2.name in non_commuting_operations:
@@ -427,9 +413,8 @@ def is_commuting(operation1, operation2, wire_map=None):
         return check_commutation_two_non_simplified_rotations(operation1, operation2)
 
     # For Sum of Pauli words the commutator is evaluated.
-    # TODO: add some checks to see if it can be improved
     if isinstance(operation1, Sum) or isinstance(operation2, Sum):
-        return qml.commutator(operation1, operation2) == 0
+        return qml.commutator(operation1, operation2) == qml.s_prod(0, qml.Identity())
 
     ctrl_base_1 = _get_target_name(operation1)
     ctrl_base_2 = _get_target_name(operation2)
