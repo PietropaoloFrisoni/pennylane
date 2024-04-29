@@ -158,7 +158,7 @@ def pattern_matching_optimization(
             ]
             tape = qml.tape.QuantumTape(ops)
 
-        For optimizing the circuit given the given following pattern of CNOTs we apply the `pattern_matching`
+        For optimizing the circuit given the following pattern of CNOTs we apply the ``pattern_matching``
         transform.
 
         >>> dev = qml.device('default.qubit', wires=5)
@@ -191,7 +191,7 @@ def pattern_matching_optimization(
 
     .. seealso:: :func:`~.pattern_matching`
 
-    **Reference:**
+    **References**
 
     [1] Iten, R., Moyard, R., Metger, T., Sutter, D. and Woerner, S., 2022.
     Exact and practical pattern matching for quantum circuit optimization.

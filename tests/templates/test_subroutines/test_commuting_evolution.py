@@ -85,6 +85,17 @@ def test_adjoint():
     assert all(np.isclose(state1, state2))
 
 
+def test_queuing():
+    """Test that CommutingEvolution de-queues the input hamiltonian."""
+
+    with qml.queuing.AnnotatedQueue() as q:
+        H = qml.X(0) + qml.Y(1)
+        op = qml.CommutingEvolution(H, 0.1, (2,))
+
+    assert len(q.queue) == 1
+    assert q.queue[0] is op
+
+
 def test_decomposition_expand():
     """Test that the decomposition of CommutingEvolution is an ApproxTimeEvolution with one step."""
 
@@ -96,7 +107,7 @@ def test_decomposition_expand():
     decomp = op.decomposition()[0]
 
     assert isinstance(decomp, qml.ApproxTimeEvolution)
-    assert all(decomp.hyperparameters["hamiltonian"].coeffs == hamiltonian.coeffs)
+    assert qml.math.allclose(decomp.hyperparameters["hamiltonian"].data, hamiltonian.data)
     assert decomp.hyperparameters["n"] == 1
 
     tape = op.expand()
@@ -141,9 +152,9 @@ class TestInputs:
     """Tests for input validation of `CommutingEvolution`."""
 
     def test_invalid_hamiltonian(self):
-        """Tests TypeError is raised if `hamiltonian` is not type `qml.Hamiltonian`."""
+        """Tests TypeError is raised if `hamiltonian` does not have a pauli rep."""
 
-        invalid_operator = qml.PauliX(0)
+        invalid_operator = qml.Hermitian(np.eye(2), 0)
 
         assert pytest.raises(TypeError, qml.CommutingEvolution, invalid_operator, 1)
 

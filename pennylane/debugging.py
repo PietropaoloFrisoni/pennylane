@@ -30,7 +30,7 @@ class _Debugger:
 
     def __init__(self, dev):
         # old device API: check if Snapshot is supported
-        if isinstance(dev, qml.Device) and "Snapshot" not in dev.operations:
+        if isinstance(dev, qml.devices.LegacyDevice) and "Snapshot" not in dev.operations:
             raise DeviceError("Device does not support snapshots.")
 
         # new device API: check if it's the simulator device
@@ -94,6 +94,9 @@ def snapshots(qnode):
             qnode.interface = qml.math.get_interface(*args, *list(kwargs.values()))
 
         with _Debugger(qnode.device) as dbg:
+            # pylint: disable=protected-access
+            if qnode._original_device:
+                qnode._original_device._debugger = qnode.device._debugger
             results = qnode(*args, **kwargs)
             # Reset interface
             if old_interface == "auto":

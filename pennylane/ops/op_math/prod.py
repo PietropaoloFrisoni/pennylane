@@ -30,7 +30,6 @@ from pennylane.operation import Operator, convert_to_opmath
 from pennylane.ops.op_math.pow import Pow
 from pennylane.ops.op_math.sprod import SProd
 from pennylane.ops.op_math.sum import Sum
-from pennylane.ops.qubit import Hamiltonian
 from pennylane.ops.qubit.non_parametric_ops import PauliX, PauliY, PauliZ
 from pennylane.queuing import QueuingManager
 from pennylane.typing import TensorLike
@@ -282,6 +281,17 @@ class Prod(CompositeOp):
     def has_decomposition(self):
         return True
 
+    @property
+    def obs(self):
+        r"""Access the operands of a ``Prod`` instance"""
+        # This is temporary property to smoothen the transition to the new operator arithmetic system.
+        # In particular, the __matmul__ (@ python operator) method between operators now generates Prod instead of Tensor instances.
+        warnings.warn(
+            "Accessing the terms of a tensor product operator via op.obs is deprecated, please use op.operands instead.",
+            qml.PennyLaneDeprecationWarning,
+        )
+        return self.operands
+
     def decomposition(self):
         r"""Decomposition of the product operator is given by each factor applied in succession.
 
@@ -295,12 +305,17 @@ class Prod(CompositeOp):
 
     def matrix(self, wire_order=None):
         """Representation of the operator as a matrix in the computational basis."""
+        if self.pauli_rep:
+            return self.pauli_rep.to_mat(wire_order=wire_order or self.wires)
 
         mats: List[TensorLike] = []
         batched: List[bool] = []  # batched[i] tells if mats[i] is batched or not
         for ops in self.overlapping_ops:
             gen = (
-                (qml.matrix(op) if isinstance(op, Hamiltonian) else op.matrix(), op.wires)
+                (
+                    (qml.matrix(op) if isinstance(op, qml.ops.Hamiltonian) else op.matrix()),
+                    op.wires,
+                )
                 for op in ops
             )
 
@@ -456,7 +471,6 @@ class Prod(CompositeOp):
 
         **Example**
 
-        >>> qml.operation.enable_new_opmath()
         >>> op = X(0) @ (0.5 * X(1) + X(2))
         >>> op.terms()
         ([0.5, 1.0],
@@ -466,14 +480,17 @@ class Prod(CompositeOp):
         """
         # try using pauli_rep:
         if pr := self.pauli_rep:
-            ops = [pauli.operation() for pauli in pr.keys()]
+            with qml.QueuingManager.stop_recording():
+                ops = [pauli.operation() for pauli in pr.keys()]
             return list(pr.values()), ops
 
-        global_phase, factors = self._simplify_factors(factors=self.operands)
+        with qml.QueuingManager.stop_recording():
+            global_phase, factors = self._simplify_factors(factors=self.operands)
+            factors = list(itertools.product(*factors))
 
-        factors = list(itertools.product(*factors))
-
-        factors = [Prod(*factor).simplify() if len(factor) > 1 else factor[0] for factor in factors]
+            factors = [
+                Prod(*factor).simplify() if len(factor) > 1 else factor[0] for factor in factors
+            ]
 
         # harvest coeffs and ops
         coeffs = []
@@ -531,6 +548,11 @@ def _swappable_ops(op1, op2, wire_map: dict = None) -> bool:
     Returns:
         bool: True if operators should be swapped, False otherwise.
     """
+    # one is broadcasted onto all wires.
+    if not op1.wires:
+        return True
+    if not op2.wires:
+        return False
     wires1 = op1.wires
     wires2 = op2.wires
     if wire_map is not None:
