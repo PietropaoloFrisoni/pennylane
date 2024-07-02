@@ -77,7 +77,7 @@ class Hamiltonian(Observable):
         coeffs (tensor_like): coefficients of the Hamiltonian expression
         observables (Iterable[Observable]): observables in the Hamiltonian expression, of same length as coeffs
         simplify (bool): Specifies whether the Hamiltonian is simplified upon initialization
-                         (like-terms are combined). The default value is `False`.
+                         (like-terms are combined). The default value is `False`. Use of this argument is deprecated.
         grouping_type (str): If not None, compute and store information on how to group commuting
             observables upon initialization. This information may be accessed when QNodes containing this
             Hamiltonian are executed on devices. The string refers to the type of binary relation between Pauli words.
@@ -85,6 +85,10 @@ class Hamiltonian(Observable):
         method (str): The graph coloring heuristic to use in solving minimum clique cover for grouping, which
             can be ``'lf'`` (Largest First) or ``'rlf'`` (Recursive Largest First). Ignored if ``grouping_type=None``.
         id (str): name to be assigned to this Hamiltonian instance
+
+    .. warning::
+        The ``simplify`` argument is deprecated and will be removed in a future release.
+        Instead, you can call ``qml.simplify`` on the constructed operator.
 
     **Example:**
 
@@ -232,9 +236,12 @@ class Hamiltonian(Observable):
 
     @classmethod
     def _unflatten(cls, data, metadata):
-        new_op = cls(data[0], data[1])
-        new_op._grouping_indices = metadata[0]  # pylint: disable=protected-access
-        return new_op
+        return cls(data[0], data[1], _grouping_indices=metadata[0])
+
+    # pylint: disable=arguments-differ
+    @classmethod
+    def _primitive_bind_call(cls, coeffs, observables, **kwargs):
+        return cls._primitive.bind(*coeffs, *observables, **kwargs, n_obs=len(observables))
 
     def __init__(
         self,
@@ -242,6 +249,7 @@ class Hamiltonian(Observable):
         observables: List[Observable],
         simplify=False,
         grouping_type=None,
+        _grouping_indices=None,
         method="rlf",
         id=None,
     ):
@@ -276,9 +284,16 @@ class Hamiltonian(Observable):
 
         # attribute to store indices used to form groups of
         # commuting observables, since recomputation is costly
-        self._grouping_indices = None
+        self._grouping_indices = _grouping_indices
 
         if simplify:
+
+            warn(
+                "The simplify argument in qml.Hamiltonian and qml.ops.LinearCombination is deprecated. "
+                "Instead, you can call qml.simplify on the constructed operator.",
+                qml.PennyLaneDeprecationWarning,
+            )
+
             # simplify upon initialization changes ops such that they wouldnt be
             # removed in self.queue() anymore, removing them here manually.
             if qml.QueuingManager.recording():
@@ -744,12 +759,12 @@ class Hamiltonian(Observable):
             coeffs = qml.math.kron(coeffs1, coeffs2)
             ops_list = itertools.product(ops1, ops2)
             terms = [qml.operation.Tensor(t[0], t[1]) for t in ops_list]
-            return Hamiltonian(coeffs, terms, simplify=True)
+            return qml.simplify(Hamiltonian(coeffs, terms))
 
         if isinstance(H, (Tensor, Observable)):
             terms = [op @ copy(H) for op in ops1]
 
-            return Hamiltonian(coeffs1, terms, simplify=True)
+            return qml.simplify(Hamiltonian(coeffs1, terms))
 
         return NotImplemented
 
@@ -764,9 +779,10 @@ class Hamiltonian(Observable):
         ops1 = self.ops.copy()
 
         if isinstance(H, (Tensor, Observable)):
+            qml.QueuingManager.remove(H)
+            qml.QueuingManager.remove(self)
             terms = [copy(H) @ op for op in ops1]
-
-            return Hamiltonian(coeffs1, terms, simplify=True)
+            return qml.simplify(Hamiltonian(coeffs1, terms))
 
         return NotImplemented
 
@@ -779,16 +795,20 @@ class Hamiltonian(Observable):
             return self
 
         if isinstance(H, Hamiltonian):
+            qml.QueuingManager.remove(H)
+            qml.QueuingManager.remove(self)
             coeffs = qml.math.concatenate([self_coeffs, copy(H.coeffs)], axis=0)
             ops.extend(H.ops.copy())
-            return Hamiltonian(coeffs, ops, simplify=True)
+            return qml.simplify(Hamiltonian(coeffs, ops))
 
         if isinstance(H, (Tensor, Observable)):
+            qml.QueuingManager.remove(H)
+            qml.QueuingManager.remove(self)
             coeffs = qml.math.concatenate(
                 [self_coeffs, qml.math.cast_like([1.0], self_coeffs)], axis=0
             )
             ops.append(H)
-            return Hamiltonian(coeffs, ops, simplify=True)
+            return qml.simplify(Hamiltonian(coeffs, ops))
 
         return NotImplemented
 
@@ -881,3 +901,15 @@ class Hamiltonian(Observable):
         new_op.hyperparameters["ops"] = new_op._ops  # pylint: disable=protected-access
         new_op._pauli_rep = "unset"  # pylint: disable=protected-access
         return new_op
+
+
+# The primitive will be None if jax is not installed in the environment
+# If defined, we need to update the implementation to repack the coefficients and observables
+# See capture module for more information
+if Hamiltonian._primitive is not None:  # pylint: disable=protected-access
+
+    @Hamiltonian._primitive.def_impl  # pylint: disable=protected-access
+    def _(*args, n_obs, **kwargs):
+        coeffs = args[:n_obs]
+        observables = args[n_obs:]
+        return type.__call__(Hamiltonian, coeffs, observables, **kwargs)
