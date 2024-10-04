@@ -51,6 +51,11 @@
 * The `Hermitian` operator now has a `compute_sparse_matrix` implementation.
   [(#6225)](https://github.com/PennyLaneAI/pennylane/pull/6225)
 
+* When an observable is repeated on a tape, `tape.diagonalizing_gates` no longer returns the 
+  diagonalizing gates for each instance of the observable. Instead, the diagonalizing gates of
+  each observable on the tape are included just once.
+  [(#6288)](https://github.com/PennyLaneAI/pennylane/pull/6288)
+
 * The number of diagonalizing gates returned in `qml.specs` now follows the `level` keyword argument 
   regarding whether the diagonalizing gates are modified by device, instead of always counting 
   unprocessed diagonalizing gates.
@@ -145,8 +150,21 @@
 * `Operator.expand` is now removed. Use `qml.tape.QuantumScript(op.deocomposition())` instead.
   [(#6227)](https://github.com/PennyLaneAI/pennylane/pull/6227)
 
-
 <h3>Deprecations 👋</h3>
+
+* Legacy operator arithmetic has been deprecated. This includes `qml.ops.Hamiltonian`, `qml.operation.Tensor`,
+  `qml.operation.enable_new_opmath`, `qml.operation.disable_new_opmath`, and `qml.operation.convert_to_legacy_H`.
+  Note that when new operator arithmetic is enabled, ``qml.Hamiltonian`` will continue to dispatch to
+  `qml.ops.LinearCombination`; this behaviour is not deprecated. For more information, check out the
+  [updated operator troubleshooting page](https://docs.pennylane.ai/en/stable/news/new_opmath.html).
+  [(#6287)](https://github.com/PennyLaneAI/pennylane/pull/6287)
+
+* `qml.pauli.PauliSentence.hamiltonian` and `qml.pauli.PauliWord.hamiltonian` are deprecated. Instead, please use
+  `qml.pauli.PauliSentence.operation` and `qml.pauli.PauliWord.operation` respectively.
+  [(#6287)](https://github.com/PennyLaneAI/pennylane/pull/6287)
+
+* `qml.pauli.simplify()` is deprecated. Instead, please use `qml.simplify(op)` or `op.simplify()`.
+  [(#6287)](https://github.com/PennyLaneAI/pennylane/pull/6287)
 
 * The `qml.BasisStatePreparation` template is deprecated.
   Instead, use `qml.BasisState`.
@@ -178,6 +196,9 @@
   [(#6244)](https://github.com/PennyLaneAI/pennylane/pull/6244)
 
 <h3>Documentation 📝</h3>
+
+* Update `qml.Qubitization` documentation based on new decomposition.
+  [(#6276)](https://github.com/PennyLaneAI/pennylane/pull/6276)
 
 * Fixed examples in the documentation of a few optimizers.
   [(#6303)](https://github.com/PennyLaneAI/pennylane/pull/6303)
