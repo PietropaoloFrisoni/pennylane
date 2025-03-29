@@ -65,7 +65,7 @@ class TestCond:
         target_wire = qml.wires.Wires(1)
 
         assert len(ops) == 4
-        assert ops[0].return_type == qml.measurements.MidMeasure
+        assert isinstance(ops[0], qml.measurements.MidMeasureMP)
 
         assert isinstance(ops[1], qml.ops.Conditional)
         assert isinstance(ops[1].base, qml.PauliX)
@@ -130,7 +130,7 @@ class TestCond:
 
         assert len(ops) == 5
 
-        assert ops[0].return_type == qml.measurements.MidMeasure
+        assert isinstance(ops[0], qml.measurements.MidMeasureMP)
 
         assert isinstance(ops[1], qml.ops.Conditional)
         assert isinstance(ops[1].base, qml.PauliX)
@@ -208,6 +208,26 @@ class TestAdditionalCond:
             m_0 = qml.measure(1)
             qml.cond(m_0, inp)()
 
+    def test_cond_error_for_mcms(self):
+        """Test that an error is raised if a mid-circuit measurement is applied inside
+        a Conditional"""
+
+        # raises error in true_fn
+        with pytest.raises(
+            ConditionalTransformError,
+            match="Only quantum functions that contain no measurements can be applied conditionally.",
+        ):
+            m_0 = qml.measure(1)
+            qml.cond(m_0, qml.measure)(0)
+
+        # raises error in false_fn
+        with pytest.raises(
+            ConditionalTransformError,
+            match="Only quantum functions that contain no measurements can be applied conditionally.",
+        ):
+            m_0 = qml.measure(1)
+            qml.cond(m_0, qml.X, qml.measure)(0)
+
     def test_map_wires(self):
         """Tests the cond.map_wires function."""
         with qml.queuing.AnnotatedQueue() as q:
@@ -265,7 +285,7 @@ class TestOtherTransforms:
         target_wire = qml.wires.Wires(1)
 
         assert len(ops) == 3
-        assert ops[0].return_type == qml.measurements.MidMeasure
+        assert isinstance(ops[0], qml.measurements.MidMeasureMP)
 
         assert isinstance(ops[1], qml.ops.Conditional)
         assert isinstance(ops[1].base, qml.ops.op_math.Adjoint)
@@ -294,7 +314,7 @@ class TestOtherTransforms:
         ops = tape.operations
 
         assert len(ops) == 3
-        assert ops[0].return_type == qml.measurements.MidMeasure
+        assert isinstance(ops[0], qml.measurements.MidMeasureMP)
 
         assert isinstance(ops[1], qml.ops.Conditional)
         assert isinstance(ops[1].base, qml.ops.op_math.Controlled)
@@ -321,7 +341,7 @@ class TestOtherTransforms:
         ops = tape.operations
 
         assert len(ops) == 3
-        assert ops[0].return_type == qml.measurements.MidMeasure
+        assert isinstance(ops[0], qml.measurements.MidMeasureMP)
 
         assert isinstance(ops[1], qml.ops.op_math.Controlled)
         assert isinstance(ops[1].base, qml.ops.Conditional)

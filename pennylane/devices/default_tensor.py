@@ -199,7 +199,9 @@ class DefaultTensor(Device):
     The backend uses the ``quimb`` library to perform the tensor network operations, and different methods can be used to simulate the quantum circuit.
     The supported methods are Matrix Product State (MPS) and Tensor Network (TN).
 
-    This device does not currently support finite-shots or differentiation. At present, the supported measurement types are expectation values, variances and state measurements.
+    This device does not currently support finite-shots or differentiation with ``diff_method`` set to ``"backprop"``, ``"adjoint"``, or ``"device"``. `Other differentiation methods <https://docs.pennylane.ai/en/stable/code/qml_gradients.html>`_ such as
+    ``parameter-shift`` and ``hadamard_grad`` are compatible with all devices, including ``default.tensor``.
+    At present, the supported measurement types are expectation values, variances, and state measurements.
     Finally, ``UserWarnings`` from the ``cotengra`` package may appear when using this device.
 
     Args:
@@ -258,8 +260,18 @@ class DefaultTensor(Device):
     We can provide additional keyword arguments to the device to customize the simulation. These are passed to the ``quimb`` backend.
 
     .. note::
-        Be aware that `quimb` uses multi-threading with `numba <https://numba.pydata.org/numba-doc/dev/user/threading-layer.html>`_ as well as for linear algebra operations with `numpy.linalg <https://numpy.org/doc/stable/reference/routines.linalg.html#linear-algebra-numpy-linalg>`_. Proper setting of the corresponding environment variables (e.g. `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `NUMBA_NUM_THREADS` etc.) depending on your hardware is highly recommended and will have a strong impact on the device's performance.
-        To avoid a slowdown in performance for circuits with more than 10 wires, we recommend setting the environment variable relevant for your BLAS library backend (e.g. `OMP_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1` or `MKL_NUM_THREADS=1`), depending on your NumPy package & associated libraries. Alternatively, you can use  `threadpoolctl <https://github.com/joblib/threadpoolctl>`_  to limit the threads within your executing script. For optimal performance you can adjust the number of threads to find the best fit for your workload.
+
+        Be aware that ``quimb`` uses multi-threading with `numba <https://numba.pydata.org/numba-doc/dev/user/threading-layer.html>`_
+        as well as for linear algebra operations with
+        `numpy.linalg <https://numpy.org/doc/stable/reference/routines.linalg.html#linear-algebra-numpy-linalg>`_. Proper setting of
+        the corresponding environment variables (e.g. ``OMP_NUM_THREADS``, ``OPENBLAS_NUM_THREADS``, ``NUMBA_NUM_THREADS`` etc.)
+        depending on your hardware is highly recommended and will have a strong impact on the device's performance.
+
+        To avoid a slowdown in performance for circuits with more than 10 wires, we recommend setting the environment variable relevant
+        for your BLAS library backend (e.g. ``OMP_NUM_THREADS=1``, ``OPENBLAS_NUM_THREADS=1`` or ``MKL_NUM_THREADS=1``), depending on your
+        NumPy package and associated libraries. Alternatively, you can use `threadpoolctl <https://github.com/joblib/threadpoolctl>`_ to
+        limit the threads within your executing script. For optimal performance you can adjust the number of threads to find the best fit
+        for your workload.
 
     .. details::
             :title: Usage with MPS Method
@@ -403,7 +415,7 @@ class DefaultTensor(Device):
         # options for TN
         self._local_simplify = kwargs.get("local_simplify", "ADCRS")
 
-        # options both for MPS and TN
+        # options for both MPS and TN
         self._contraction_optimizer = kwargs.get("contraction_optimizer", "auto-hq")
         self._contract = None
 

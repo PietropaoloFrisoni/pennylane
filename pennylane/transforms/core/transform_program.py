@@ -237,6 +237,8 @@ class TransformProgram:
 
     Programs have several implemented dunder methods for easy manipulation.
 
+    >>> from pennylane.transforms.core.transform_program import TransformProgram
+    >>> from copy import copy
     >>> program = TransformProgram()
     >>> program.add_transform(qml.compile)
     >>> program.add_transform(qml.transforms.cancel_inverses)
@@ -252,7 +254,7 @@ class TransformProgram:
     True
     >>> True if TransformProgram() else False
     False
-    >>> program2 = copy.copy(program)
+    >>> program2 = copy(program)
     >>> program2 == program
     True
     >>> qml.compile in program
@@ -548,7 +550,7 @@ class TransformProgram:
             return [qml.math.get_trainable_indices(param) for param in params]
         return None
 
-    def __call__(
+    def __call_tapes(
         self, tapes: QuantumScriptBatch
     ) -> tuple[QuantumScriptBatch, BatchPostprocessingFn]:
         if not self:
@@ -613,3 +615,29 @@ class TransformProgram:
 
         # Reset classical jacobians
         return tuple(tapes), postprocessing_fn
+
+    def __call_jaxpr(
+        self, jaxpr: "jax.core.Jaxpr", consts: Sequence, *args
+    ) -> "jax.core.ClosedJaxpr":
+        # pylint: disable=import-outside-toplevel
+        import jax
+
+        cur_jaxpr = jax.core.ClosedJaxpr(jaxpr, consts)
+        for container in self:
+            _, targs, tkwargs, _, plxpr_transform, _, _ = container
+            cur_jaxpr = plxpr_transform(cur_jaxpr.jaxpr, cur_jaxpr.consts, targs, tkwargs, *args)
+
+        return cur_jaxpr
+
+    @overload
+    def __call__(
+        self, jaxpr: "jax.core.Jaxpr", consts: Sequence, *args
+    ) -> "jax.core.ClosedJaxpr": ...
+    @overload
+    def __call__(
+        self, tapes: QuantumScriptBatch
+    ) -> tuple[QuantumScriptBatch, BatchPostprocessingFn]: ...
+    def __call__(self, *args, **kwargs):
+        if type(args[0]).__name__ == "Jaxpr":
+            return self.__call_jaxpr(*args, **kwargs)
+        return self.__call_tapes(*args, **kwargs)

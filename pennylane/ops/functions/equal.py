@@ -14,7 +14,7 @@
 """
 This module contains the qml.equal function.
 """
-# pylint: disable=too-many-arguments,too-many-return-statements,too-many-branches
+# pylint: disable=too-many-arguments,too-many-return-statements,too-many-branches, too-many-positional-arguments
 from collections.abc import Iterable
 from functools import singledispatch
 from typing import Union
@@ -26,7 +26,7 @@ from pennylane.measurements.counts import CountsMP
 from pennylane.measurements.mid_measure import MeasurementValue, MidMeasureMP
 from pennylane.measurements.mutual_info import MutualInfoMP
 from pennylane.measurements.vn_entropy import VnEntropyMP
-from pennylane.operation import Observable, Operator
+from pennylane.operation import Operator
 from pennylane.ops import Adjoint, CompositeOp, Conditional, Controlled, Exp, Pow, SProd
 from pennylane.pauli import PauliSentence, PauliWord
 from pennylane.pulse.parametrized_evolution import ParametrizedEvolution
@@ -219,7 +219,7 @@ def _equal(
     rtol=1e-5,
     atol=1e-9,
 ) -> Union[bool, str]:  # pylint: disable=unused-argument
-    if not isinstance(op2, type(op1)) and not isinstance(op1, Observable):
+    if not isinstance(op2, type(op1)):
         return f"op1 and op2 are of different types.  Got {type(op1)} and {type(op2)}."
 
     return _equal_dispatch(
@@ -297,10 +297,6 @@ def _equal_operators(
     atol=1e-9,
 ):
     """Default function to determine whether two Operator objects are equal."""
-    if not isinstance(
-        op2, type(op1)
-    ):  # clarifies cases involving PauliX/Y/Z (Observable/Operation)
-        return f"op1 and op2 are of different types. Got {type(op1)} and {type(op2)}"
 
     if isinstance(op1, qml.Identity):
         # All Identities are equivalent, independent of wires.
@@ -752,39 +748,6 @@ def _equal_shadow_measurements(op1: ShadowExpvalMP, op2: ShadowExpvalMP, **_):
 @_equal_dispatch.register
 def _equal_counts(op1: CountsMP, op2: CountsMP, **kwargs):
     return _equal_measurements(op1, op2, **kwargs) and op1.all_outcomes == op2.all_outcomes
-
-
-@_equal_dispatch.register
-# pylint: disable=unused-argument
-def _equal_basis_rotation(
-    op1: qml.BasisRotation,
-    op2: qml.BasisRotation,
-    check_interface=True,
-    check_trainability=True,
-    rtol=1e-5,
-    atol=1e-9,
-):
-    if not qml.math.allclose(
-        op1.hyperparameters["unitary_matrix"],
-        op2.hyperparameters["unitary_matrix"],
-        atol=atol,
-        rtol=rtol,
-    ):
-        return (
-            "The hyperparameter unitary_matrix is not equal for op1 and op2.\n"
-            f"Got {op1.hyperparameters['unitary_matrix']}\n and {op2.hyperparameters['unitary_matrix']}."
-        )
-    if op1.wires != op2.wires:
-        return f"op1 and op2 have different wires. Got {op1.wires} and {op2.wires}."
-    if check_interface:
-        interface1 = qml.math.get_interface(op1.hyperparameters["unitary_matrix"])
-        interface2 = qml.math.get_interface(op2.hyperparameters["unitary_matrix"])
-        if interface1 != interface2:
-            return (
-                "The hyperparameter unitary_matrix has different interfaces for op1 and op2."
-                f" Got {interface1} and {interface2}."
-            )
-    return True
 
 
 @_equal_dispatch.register
