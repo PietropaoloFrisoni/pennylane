@@ -20,11 +20,11 @@ import os
 import warnings
 from collections.abc import Callable, Generator, Sequence
 from copy import copy
-from itertools import chain
 from typing import Optional, Type
 
 import pennylane as qml
 from pennylane import Snapshot, transform
+from pennylane.math import requires_grad
 from pennylane.measurements import SampleMeasurement, StateMeasurement
 from pennylane.operation import StatePrepBase
 from pennylane.tape import QuantumScript, QuantumScriptBatch
@@ -161,7 +161,9 @@ def validate_device_wires(
                     modified = True
                     new_mp = copy(mp)
                     new_mp._wires = wires  # pylint:disable=protected-access
-                    new_ops[i] = qml.Snapshot(measurement=new_mp, tag=op.tag)
+                    new_ops[i] = qml.Snapshot(
+                        measurement=new_mp, tag=op.tag, shots=op.hyperparameters["shots"]
+                    )
         if not new_ops:
             new_ops = tape.operations  # no copy in this case
 
@@ -187,8 +189,9 @@ def mid_circuit_measurements(
 ) -> tuple[QuantumScriptBatch, PostprocessingFn]:
     """Provide the transform to handle mid-circuit measurements.
 
-    If the tape or device uses finite-shot, use the native implementation (i.e. no transform),
-    and use the ``qml.defer_measurements`` transform otherwise.
+    In the case where no method is specified, if the tape or device
+    uses finite-shot, the ``qml.dynamic_one_shot`` transform will be
+    applied, otherwise ``qml.defer_measurements`` is used instead.
     """
     if isinstance(mcm_config, dict):
         mcm_config = MCMConfig(**mcm_config)
@@ -198,7 +201,7 @@ def mid_circuit_measurements(
 
     if mcm_method == "one-shot":
         return qml.dynamic_one_shot(tape, postselect_mode=mcm_config.postselect_mode)
-    if mcm_method == "tree-traversal":
+    if mcm_method in ("tree-traversal", "device"):
         return (tape,), null_postprocessing
     return qml.defer_measurements(
         tape, allow_postselect=isinstance(device, qml.devices.DefaultQubit)
@@ -276,13 +279,13 @@ def validate_adjoint_trainable_params(
     """
 
     for op in tape.operations[: tape.num_preps]:
-        if qml.operation.is_trainable(op):
+        if any(requires_grad(d) for d in op.data):
             raise qml.QuantumFunctionError(
                 "Differentiating with respect to the input parameters of state-prep operations "
                 "is not supported with the adjoint differentiation method."
             )
     for m in tape.measurements:
-        if m.obs and qml.operation.is_trainable(m.obs):
+        if m.obs and any(requires_grad(d) for d in m.obs.data):
             warnings.warn(
                 f"Differentiating with respect to the input parameters of {m.obs.name} "
                 "is not supported with the adjoint differentiation method. Gradients are computed "
@@ -508,28 +511,38 @@ def validate_measurements(
         def sample_measurements(m):
             return isinstance(m, SampleMeasurement)
 
-    # Gather all the measurements present in the snapshot operations with the
-    # exception of `qml.state` as this is supported for any supported simulator regardless
-    # of its configuration
-    snapshot_measurements = [
-        meas
-        for op in tape.operations
-        if isinstance(op, qml.Snapshot)
-        and not isinstance(meas := op.hyperparameters["measurement"], qml.measurements.StateMP)
-    ]
-
-    shots = qml.measurements.Shots(tape.shots)
-
-    if shots.total_shots is not None:
-        for m in chain(snapshot_measurements, tape.measurements):
+    if tape.shots:
+        for m in tape.measurements:
             if not sample_measurements(m):
                 raise qml.DeviceError(f"Measurement {m} not accepted with finite shots on {name}")
-
     else:
-        for m in chain(snapshot_measurements, tape.measurements):
+        for m in tape.measurements:
             if not analytic_measurements(m):
                 raise qml.DeviceError(
                     f"Measurement {m} not accepted for analytic simulation on {name}."
                 )
 
+    _validate_snapshot_shots(tape, sample_measurements, analytic_measurements, name)
+
     return (tape,), null_postprocessing
+
+
+def _validate_snapshot_shots(tape, sample_measurements, analytic_measurements, name):
+    for op in tape.operations:
+        if isinstance(op, qml.Snapshot):
+            shots = (
+                tape.shots
+                if op.hyperparameters["shots"] == "workflow"
+                else op.hyperparameters["shots"]
+            )
+            m = op.hyperparameters["measurement"]
+            if shots:
+                if not sample_measurements(m):
+                    raise qml.DeviceError(
+                        f"Measurement {m} not accepted with finite shots on {name}"
+                    )
+            else:
+                if not analytic_measurements(m):
+                    raise qml.DeviceError(
+                        f"Measurement {m} not accepted for analytic simulation on {name}."
+                    )
