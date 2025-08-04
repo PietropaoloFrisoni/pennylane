@@ -14,10 +14,11 @@
 """
 This submodule defines a strategy structure for defining custom plxpr interpreters
 """
+from collections.abc import Callable, Sequence
+
 # pylint: disable=no-self-use
 from copy import copy
 from functools import partial, wraps
-from typing import Callable, Optional, Sequence
 
 import jax
 
@@ -44,7 +45,7 @@ A dictionary containing flattened style cond, while, and for loop higher order p
 """
 
 
-def _fill_in_shape_with_dyn_shape(dyn_shape: tuple["jax.core.Tracer"], shape: tuple[Optional[int]]):
+def _fill_in_shape_with_dyn_shape(dyn_shape: tuple["jax.core.Tracer"], shape: tuple[int | None]):
     """
     A helper for broadcast_in_dim and iota to combine static dimensions and dynamic dimensions.
 
@@ -585,7 +586,7 @@ def handle_while_loop(
     )
 
 
-# pylint: disable=unused-argument, too-many-arguments
+# pylint: disable=too-many-arguments
 @PlxprInterpreter.register_primitive(qnode_prim)
 def handle_qnode(self, *invals, shots, qnode, device, execution_config, qfunc_jaxpr, n_consts):
     """Handle a qnode primitive."""

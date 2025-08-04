@@ -21,9 +21,9 @@ from itertools import product
 import pytest
 
 import pennylane as qml
-from pennylane.capture import CaptureError
+from pennylane.exceptions import CaptureError, QuantumFunctionError
 
-pytestmark = [pytest.mark.jax, pytest.mark.usefixtures("enable_disable_plxpr")]
+pytestmark = [pytest.mark.jax, pytest.mark.capture]
 
 jax = pytest.importorskip("jax")
 jnp = jax.numpy
@@ -641,7 +641,7 @@ class TestDifferentiation:
             def execute(self, *_, **__):
                 return 0
 
-        with pytest.raises(qml.QuantumFunctionError, match="does not support backprop"):
+        with pytest.raises(QuantumFunctionError, match="does not support backprop"):
 
             @qml.qnode(DummyDev(wires=2), diff_method="backprop")
             def _(x):
@@ -1564,9 +1564,7 @@ class TestQNodeAutographIntegration:
 class TestStaticArgnums:
     """Unit tests for `QNode.static_argnums`."""
 
-    @pytest.mark.parametrize(
-        "sort_static_argnums", [True, pytest.param(False, marks=pytest.mark.xfail)]
-    )
+    @pytest.mark.parametrize("sort_static_argnums", [True, False])
     def test_qnode_static_argnums(self, sort_static_argnums):
         """Test that a QNode's static argnums are used to capture the QNode's quantum function."""
         # Testing using `jax.jit` with `static_argnums` is done in the `TestCaptureCaching` class
