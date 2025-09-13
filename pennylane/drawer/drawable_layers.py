@@ -16,9 +16,9 @@ This module contains a helper function to sort operations into layers.
 """
 
 from pennylane.measurements import MeasurementProcess, MidMeasureMP
-from pennylane.ops import Conditional
+from pennylane.ops import Conditional, GlobalPhase, Identity
 
-from .utils import default_wire_map
+from .utils import default_wire_map, unwrap_controls
 
 
 def _recursive_find_layer(layer_to_check, op_occupied_wires, occupied_wires_per_layer):
@@ -96,9 +96,11 @@ def _get_op_occupied_wires(op, wire_map, bit_map):
         max_wire = max(wire_map.values())
         return set(range(min_wire, max_wire + 1))
 
-    if len(op.wires) == 0:
-        # if no wires, then it acts on all wires
-        # for example, qml.state and qml.sample
+    *_, base = unwrap_controls(op)
+
+    if len(op.wires) == 0 or isinstance(base, (GlobalPhase, Identity)):
+        # if no wires, then it acts on all wires. For example qml.state and qml.sample or
+        # (controlled) GlobalPhase or (controlled) Identity
         mapped_wires = set(wire_map.values())
         return mapped_wires
 
@@ -147,7 +149,7 @@ def drawable_layers(operations, wire_map=None, bit_map=None):
 
     """
 
-    wire_map = wire_map or default_wire_map(operations)
+    wire_map = wire_map or default_wire_map(operations)[1]
     bit_map = bit_map or {}
 
     # initialize for operation layers
@@ -182,7 +184,15 @@ def drawable_layers(operations, wire_map=None, bit_map=None):
             # Find occupied wires of the operator/measurement process and find which layer to
             # put it in.
             op_occupied_wires = _get_op_occupied_wires(op, wire_map, bit_map)
-            op_layer = _recursive_find_layer(max_layer, op_occupied_wires, occupied_wires_per_layer)
+            try:
+                op_layer = _recursive_find_layer(
+                    max_layer, op_occupied_wires, occupied_wires_per_layer
+                )
+            except RecursionError as e:
+                raise RecursionError(
+                    f"Drawer is currently at depth {max_layer}, which is too deep to handle. "
+                    "Try drawing a smaller subset of your circuit instead."
+                ) from e
             op_occupied_cwires = set()
 
         # see if need to add new layer

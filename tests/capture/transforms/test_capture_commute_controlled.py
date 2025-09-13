@@ -23,7 +23,7 @@ import pennylane as qml
 
 jax = pytest.importorskip("jax")
 
-pytestmark = [pytest.mark.jax, pytest.mark.usefixtures("enable_disable_plxpr")]
+pytestmark = [pytest.mark.jax, pytest.mark.capture]
 
 from pennylane.capture.primitives import cond_prim, for_loop_prim, measure_prim, while_loop_prim
 from pennylane.tape.plxpr_conversion import CollectOpsandMeas
@@ -740,7 +740,7 @@ class TestCommuteControlledPLXPR:
 
         jaxpr = jax.make_jaxpr(circuit)()
         transformed_jaxpr = commute_controlled_plxpr_to_plxpr(jaxpr.jaxpr, jaxpr.consts, [], {})
-        assert isinstance(transformed_jaxpr, jax.core.ClosedJaxpr)
+        assert isinstance(transformed_jaxpr, jax.extend.core.ClosedJaxpr)
         assert len(transformed_jaxpr.eqns) == 14
 
         expected_ops = [

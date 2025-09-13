@@ -22,6 +22,7 @@ from scipy import sparse
 import pennylane as qml
 from pennylane import math
 from pennylane.ops import Identity, PauliX, PauliY, PauliZ, Prod, SProd, Sum
+from pennylane.queuing import QueuingManager
 from pennylane.typing import TensorLike
 from pennylane.wires import Wires, WiresLike
 
@@ -504,6 +505,7 @@ class PauliWord(dict):
             current_size *= 2
         return indices
 
+    @QueuingManager.stop_recording()
     def operation(self, wire_order: WiresLike = ()):
         """Returns a native PennyLane :class:`~pennylane.operation.Operation` representing the PauliWord."""
         if len(self) == 0:
@@ -539,6 +541,7 @@ class PauliSentence(dict):
 
     **Examples**
 
+    >>> from pennylane import PauliSentence, PauliWord
     >>> ps = PauliSentence({
     ...     PauliWord({0:'X', 1:'Y'}): 1.23,
     ...     PauliWord({2:'Z', 0:'Y'}): -0.45j
@@ -812,7 +815,7 @@ class PauliSentence(dict):
     @property
     def wires(self):
         """Track wires of the PauliSentence."""
-        return Wires.all_wires((pw.wires for pw in self.keys()))
+        return Wires.all_wires(pw.wires for pw in self.keys())
 
     def to_mat(self, wire_order=None, format="dense", buffer_size=None):
         """Returns the matrix representation.
@@ -1001,6 +1004,7 @@ class PauliSentence(dict):
         matrix.eliminate_zeros()
         return matrix
 
+    @QueuingManager.stop_recording()
     def operation(self, wire_order: WiresLike = ()):
         """Returns a native PennyLane :class:`~pennylane.operation.Operation` representing the PauliSentence."""
         if len(self) == 0:

@@ -19,74 +19,23 @@ executed by a device.
 
 import contextlib
 import copy
+import warnings
 from collections import Counter
 from collections.abc import Callable, Hashable, Iterable, Iterator, Sequence
 from functools import cached_property
-from typing import Any, Optional, TypeVar, Union
+from typing import Any, ParamSpec, TypeVar, Union
 
 import pennylane as qml
+from pennylane.exceptions import PennyLaneDeprecationWarning
 from pennylane.measurements import MeasurementProcess
 from pennylane.measurements.shots import Shots, ShotsLike
-from pennylane.operation import _UNSET_BATCH_SIZE, Observable, Operation, Operator
+from pennylane.operation import _UNSET_BATCH_SIZE, Operation, Operator
 from pennylane.pytrees import register_pytree
 from pennylane.queuing import AnnotatedQueue, process_queue
 from pennylane.typing import TensorLike
 from pennylane.wires import Wires, WiresLike
 
-OPENQASM_GATES = {
-    "CNOT": "cx",
-    "CZ": "cz",
-    "U3": "u3",
-    "U2": "u2",
-    "U1": "u1",
-    "Identity": "id",
-    "PauliX": "x",
-    "PauliY": "y",
-    "PauliZ": "z",
-    "Hadamard": "h",
-    "S": "s",
-    "Adjoint(S)": "sdg",
-    "T": "t",
-    "Adjoint(T)": "tdg",
-    "RX": "rx",
-    "RY": "ry",
-    "RZ": "rz",
-    "CRX": "crx",
-    "CRY": "cry",
-    "CRZ": "crz",
-    "SWAP": "swap",
-    "Toffoli": "ccx",
-    "CSWAP": "cswap",
-    "PhaseShift": "u1",
-}
-"""
-dict[str, str]: Maps PennyLane gate names to equivalent QASM gate names.
-
-Note that QASM has two native gates:
-
-- ``U`` (equivalent to :class:`~.U3`)
-- ``CX`` (equivalent to :class:`~.CNOT`)
-
-All other gates are defined in the file stdgates.inc:
-https://github.com/Qiskit/openqasm/blob/master/examples/stdgates.inc
-"""
-
 QS = TypeVar("QS", bound="QuantumScript")
-
-
-class SpecsDict(dict):
-    """A special dictionary for storing the specs of a circuit. Used to customize ``KeyError`` messages."""
-
-    def __getitem__(self, __k):
-        if __k == "num_diagonalizing_gates":
-            raise KeyError(
-                "num_diagonalizing_gates is no longer in specs due to the ambiguity of the definition "
-                "and extreme performance costs."
-            )
-        try:
-            return super().__getitem__(__k)
-        except KeyError as e:
-            raise KeyError(f"key {__k} not available. Options are {set(self.keys())}") from e
 
 
 class QuantumScript:
@@ -186,10 +135,10 @@ class QuantumScript:
 
     def __init__(
         self,
-        ops: Optional[Iterable[Operator]] = None,
-        measurements: Optional[Iterable[MeasurementProcess]] = None,
-        shots: Optional[ShotsLike] = None,
-        trainable_params: Optional[Sequence[int]] = None,
+        ops: Iterable[Operator] | None = None,
+        measurements: Iterable[MeasurementProcess] | None = None,
+        shots: ShotsLike | None = None,
+        trainable_params: Sequence[int] | None = None,
     ):
         self._ops = [] if ops is None else list(ops)
         self._measurements = [] if measurements is None else list(measurements)
@@ -216,12 +165,12 @@ class QuantumScript:
         fingerprint.extend(self.shots)
         return hash(tuple(fingerprint))
 
-    def __iter__(self) -> Iterator[Union[Operator, MeasurementProcess]]:
+    def __iter__(self) -> Iterator[Operator | MeasurementProcess]:
         """Iterator[.Operator, .MeasurementProcess]: Return an iterator to the
         underlying quantum circuit object."""
         return iter(self.circuit)
 
-    def __getitem__(self, idx: int) -> Union[Operator, MeasurementProcess]:
+    def __getitem__(self, idx: int) -> Operator | MeasurementProcess:
         """Union[Operator, MeasurementProcess]: Return the indexed operator from underlying quantum
         circuit object."""
         return self.circuit[idx]
@@ -236,7 +185,7 @@ class QuantumScript:
     # ========================================================
 
     @property
-    def circuit(self) -> list[Union[Operator, MeasurementProcess]]:
+    def circuit(self) -> list[Operator | MeasurementProcess]:
         """Returns the underlying quantum circuit as a list of operations and measurements.
 
         The circuit is created with the assumptions that:
@@ -270,11 +219,11 @@ class QuantumScript:
         return self._ops
 
     @property
-    def observables(self) -> list[Union[MeasurementProcess, Observable]]:
+    def observables(self) -> list[MeasurementProcess | Operator]:
         """Returns the observables on the quantum script.
 
         Returns:
-            list[.MeasurementProcess, .Observable]]: list of observables
+            list[.MeasurementProcess, .Operator]]: list of observables
 
         **Example**
 
@@ -323,7 +272,7 @@ class QuantumScript:
         return len(self.trainable_params)
 
     @property
-    def batch_size(self) -> Optional[int]:
+    def batch_size(self) -> int | None:
         r"""The batch size of the quantum script inferred from the batch sizes
         of the used operations for parameter broadcasting.
 
@@ -456,7 +405,7 @@ class QuantumScript:
         return len(self.wires)
 
     @cached_property
-    def par_info(self) -> list[dict[str, Union[int, Operator]]]:
+    def par_info(self) -> list[dict[str, int | Operator]]:
         """Returns the parameter information of the operations and measurements in the quantum script.
 
         Returns:
@@ -491,7 +440,7 @@ class QuantumScript:
         i.e., that do not have their own unique set of wires.
 
         Returns:
-            list[~.Observable]: list of observables with shared wires.
+            list[~.Operator]: list of observables with shared wires.
 
         """
         if self._obs_sharing_wires is None:
@@ -516,7 +465,7 @@ class QuantumScript:
         identifying any observables that share wires.
 
         Sets:
-            _obs_sharing_wires (list[~.Observable]): Observables that share wires with
+            _obs_sharing_wires (list[~.Operator]): Observables that share wires with
                 any other observable
             _obs_sharing_wires_id (list[int]): Indices of the measurements that contain
                 the observables in _obs_sharing_wires
@@ -601,7 +550,7 @@ class QuantumScript:
         return self._trainable_params
 
     @trainable_params.setter
-    def trainable_params(self, param_indices: list[int]):
+    def trainable_params(self, param_indices: list[int] | set[int]):
         """Store the indices of parameters that support differentiability.
 
         Args:
@@ -629,6 +578,7 @@ class QuantumScript:
             for the provided trainable parameter.
         """
         # get the index of the parameter in the script
+        # pylint: disable=unsubscriptable-object
         t_idx = self.trainable_params[idx]
 
         # get the info for the parameter
@@ -739,7 +689,6 @@ class QuantumScript:
         >>> newer_qscript.get_parameters()
         [-0.1, 0.2, 0.5]
         """
-        # pylint: disable=no-member
 
         if len(params) != len(indices):
             raise ValueError("Number of provided parameters does not match number of indices")
@@ -789,7 +738,7 @@ class QuantumScript:
 
     def shape(
         self, device: Union["qml.devices.Device", "qml.devices.LegacyDevice"]
-    ) -> Union[tuple[int, ...], tuple[tuple[int, ...], ...]]:
+    ) -> tuple[int, ...] | tuple[tuple[int, ...], ...]:
         """Produces the output shape of the quantum script by inspecting its measurements
         and the device used for execution.
 
@@ -804,6 +753,11 @@ class QuantumScript:
         Returns:
             Union[tuple[int], tuple[tuple[int]]]: the output shape(s) of the quantum script result
 
+        .. warning::
+
+            The ``QuantumScript.shape`` method is deprecated and will be removed in v0.44.
+            Instead, please use ``MeasurementProcess.shape``.
+
         **Examples**
 
         .. code-block:: pycon
@@ -817,6 +771,12 @@ class QuantumScript:
             >>> qs.shape(dev)
             ((4,), (), (4,))
         """
+        warnings.warn(
+            "``QuantumScript.shape`` is deprecated and will be removed in v0.44. "
+            "Instead, please use ``MeasurementProcess.shape``.",
+            PennyLaneDeprecationWarning,
+        )
+
         num_device_wires = len(device.wires) if device.wires else len(self.wires)
 
         def get_shape(mp, _shots):
@@ -835,13 +795,18 @@ class QuantumScript:
         return tuple(shape) if self.shots.has_partitioned_shots else shape[0]
 
     @property
-    def numeric_type(self) -> Union[type, tuple[type, ...]]:
+    def numeric_type(self) -> type | tuple[type, ...]:
         """Returns the expected numeric type of the quantum script result by inspecting
         its measurements.
 
         Returns:
             Union[type, Tuple[type]]: The numeric type corresponding to the result type of the
             quantum script, or a tuple of such types if the script contains multiple measurements
+
+        .. warning::
+
+            The ``QuantumScript.numeric_type`` method is deprecated and will be removed in v0.44.
+            Instead, please use ``MeasurementProcess.numeric_type``.
 
         **Example:**
 
@@ -852,6 +817,12 @@ class QuantumScript:
             >>> qs.numeric_type
             complex
         """
+        warnings.warn(
+            "``QuantumScript.numeric_type`` is deprecated and will be removed in v0.44. "
+            "Instead, please use ``MeasurementProcess.numeric_type``.",
+            PennyLaneDeprecationWarning,
+        )
+
         types = tuple(observable.numeric_type for observable in self.measurements)
 
         return types[0] if len(types) == 1 else types
@@ -959,7 +930,7 @@ class QuantumScript:
     def expand(
         self,
         depth: int = 1,
-        stop_at: Optional[Callable[[Union[Operation, MeasurementProcess]], bool]] = None,
+        stop_at: Callable[[Operation | MeasurementProcess], bool] | None = None,
         expand_measurements: bool = False,
     ) -> "QuantumScript":
         """Expand all operations to a specific depth.
@@ -1115,11 +1086,11 @@ class QuantumScript:
         return self._graph
 
     @property
-    def specs(self) -> SpecsDict[str, Any]:
+    def specs(self) -> "qml.resource.resource.SpecsDict[str, Any]":
         """Resource information about a quantum circuit.
 
         Returns:
-            dict[str, Union[defaultdict,int]]: dictionaries that contain quantum script specifications
+            SpecsDict[str, Any]: A dictionary containing the specifications of the quantum script.
 
         **Example**
          >>> ops = [qml.Hadamard(0), qml.RX(0.26, 1), qml.CNOT((1,0)),
@@ -1142,28 +1113,16 @@ class QuantumScript:
         gate_sizes:
         {1: 4, 2: 2}
         """
-        # pylint: disable=protected-access
         if self._specs is None:
-            resources = qml.resource.resource._count_resources(self)
-            algo_errors = qml.resource.error._compute_algo_error(self)
-
-            self._specs = SpecsDict(
-                {
-                    "resources": resources,
-                    "errors": algo_errors,
-                    "num_observables": len(self.observables),
-                    "num_trainable_params": self.num_params,
-                }
-            )
-
+            self._specs = qml.resource.resource.specs_from_tape(self)
         return self._specs
 
     # pylint: disable=too-many-arguments, too-many-positional-arguments
     def draw(
         self,
-        wire_order: Optional[Iterable[Hashable]] = None,
+        wire_order: Iterable[Hashable] | None = None,
         show_all_wires: bool = False,
-        decimals: Optional[int] = None,
+        decimals: int | None = None,
         max_length: int = 100,
         show_matrices: bool = True,
     ) -> str:
@@ -1192,10 +1151,10 @@ class QuantumScript:
 
     def to_openqasm(
         self,
-        wires: Optional[WiresLike] = None,
+        wires: WiresLike | None = None,
         rotations: bool = True,
         measure_all: bool = True,
-        precision: Optional[int] = None,
+        precision: int | None = None,
     ) -> str:
         """Serialize the circuit as an OpenQASM 2.0 program.
 
@@ -1209,6 +1168,11 @@ class QuantumScript:
             The serialized OpenQASM program assumes that gate definitions
             in ``qelib1.inc`` are available.
 
+        .. warning::
+
+            The ``QuantumScript.to_openqasm`` method is deprecated and will be removed in v0.44.
+            Instead, please use the :func:`~.to_openqasm` function.
+
         Args:
             wires (Wires or None): the wires to use when serializing the circuit
             rotations (bool): in addition to serializing user-specified
@@ -1221,76 +1185,23 @@ class QuantumScript:
         Returns:
             str: OpenQASM serialization of the circuit
         """
-        wires = wires or self.wires
+        warnings.warn(
+            "``QuantumScript.to_openqasm`` is deprecated and will be removed in v0.44. "
+            "Instead, please use ``qml.to_openqasm``.",
+            PennyLaneDeprecationWarning,
+        )
 
-        # add the QASM headers
-        qasm_str = 'OPENQASM 2.0;\ninclude "qelib1.inc";\n'
-
-        if self.num_wires == 0:
-            # empty circuit
-            return qasm_str
-
-        # create the quantum and classical registers
-        qasm_str += f"qreg q[{len(wires)}];\n"
-        qasm_str += f"creg c[{len(wires)}];\n"
-
-        # get the user applied circuit operations without interface information
-        [transformed_tape], _ = qml.transforms.convert_to_numpy_parameters(self)
-        operations = transformed_tape.operations
-
-        if rotations:
-            # if requested, append diagonalizing gates corresponding
-            # to circuit observables
-            operations += self.diagonalizing_gates
-
-        # decompose the queue
-        # pylint: disable=no-member
-        just_ops = QuantumScript(operations)
-        operations = just_ops.expand(
-            depth=10, stop_at=lambda obj: obj.name in OPENQASM_GATES
-        ).operations
-
-        # create the QASM code representing the operations
-        for op in operations:
-            try:
-                gate = OPENQASM_GATES[op.name]
-            except KeyError as e:
-                raise ValueError(f"Operation {op.name} not supported by the QASM serializer") from e
-
-            wire_labels = ",".join([f"q[{wires.index(w)}]" for w in op.wires.tolist()])
-            params = ""
-
-            if op.num_params > 0:
-                # If the operation takes parameters, construct a string
-                # with parameter values.
-                if precision is not None:
-                    params = "(" + ",".join([f"{p:.{precision}}" for p in op.parameters]) + ")"
-                else:
-                    # use default precision
-                    params = "(" + ",".join([str(p) for p in op.parameters]) + ")"
-
-            qasm_str += f"{gate}{params} {wire_labels};\n"
-
-        # apply computational basis measurements to each quantum register
-        # NOTE: This is not strictly necessary, we could inspect self.observables,
-        # and then only measure wires which are requested by the user. However,
-        # some devices which consume QASM require all registers be measured, so
-        # measure all wires by default to be safe.
-        if measure_all:
-            for wire in range(len(wires)):
-                qasm_str += f"measure q[{wire}] -> c[{wire}];\n"
-        else:
-            measured_wires = Wires.all_wires([m.wires for m in self.measurements])
-
-            for w in measured_wires:
-                wire_indx = self.wires.index(w)
-                qasm_str += f"measure q[{wire_indx}] -> c[{wire_indx}];\n"
-
-        return qasm_str
+        return qml.to_openqasm(
+            self,
+            wires=wires,
+            rotations=rotations,
+            measure_all=measure_all,
+            precision=precision,
+        )
 
     @classmethod
     def from_queue(
-        cls: type[QS], queue: qml.queuing.AnnotatedQueue, shots: Optional[ShotsLike] = None
+        cls: type[QS], queue: qml.queuing.AnnotatedQueue, shots: ShotsLike | None = None
     ) -> QS:
         """Construct a QuantumScript from an AnnotatedQueue."""
         return cls(*process_queue(queue), shots=shots)
@@ -1306,7 +1217,8 @@ class QuantumScript:
         The standard order is defined by the operator wires being increasing
         integers starting at zero, to match array indices. If there are any
         measurement wires that are not in any operations, those will be mapped
-        to higher values.
+        to higher values. If there are any work wires that are not used in
+        any operations or measurements, those will be mapped to higher values.
 
         **Example:**
 
@@ -1326,25 +1238,53 @@ class QuantumScript:
         >>> circuit.map_to_standard_wires() is circuit
         True
 
-        """
-        op_wires = Wires.all_wires(op.wires for op in self.operations)
-        meas_wires = Wires.all_wires(mp.wires for mp in self.measurements)
-        num_op_wires = len(op_wires)
-        meas_only_wires = set(meas_wires) - set(op_wires)
-        if set(op_wires) == set(range(num_op_wires)) and meas_only_wires == set(
-            range(num_op_wires, num_op_wires + len(meas_only_wires))
-        ):
-            return self
+        Work wires that are not used in operations or measurements are mapped to the last
+        positions in the circuit:
 
-        wire_map = {w: i for i, w in enumerate(op_wires + meas_only_wires)}
+        >>> mcx = qml.MultiControlledX([1, 4, "b", 2], work_wires=[0, 6])
+        >>> circuit = qml.tape.QuantumScript([mcx], [qml.probs(wires=[2, 3, 6])])
+        >>> mapped_circuit = circuit.map_to_standard_wires()
+        >>> mapped_circuit.circuit
+        [MultiControlledX(wires=[0, 1, 2, 3], control_values=[True, True, True]),
+         probs(wires=[3, 4, 5])]
+        >>> mapped_circuit[0].work_wires
+        Wires([6, 5])
+        """
+        wire_map = self._get_standard_wire_map()
+        if wire_map is None:
+            return self
         tapes, fn = qml.map_wires(self, wire_map)
         return fn(tapes)
 
+    def _get_standard_wire_map(self) -> dict:
+        """Helper function to produce the wire map for map_to_standard_wires."""
+        op_wires = Wires.all_wires(op.wires for op in self.operations)
+        work_wires = Wires.all_wires(getattr(op, "work_wires", []) for op in self.operations)
+        meas_wires = Wires.all_wires(mp.wires for mp in self.measurements)
+        num_op_wires = len(op_wires)
+        meas_only_wires = set(meas_wires) - set(op_wires)
+        num_op_meas_wires = num_op_wires + len(meas_only_wires)
+        work_only_wires = set(work_wires) - set(op_wires) - meas_only_wires
+        # If the op wires are consecutive integers, followed by measurement-only wires, followed
+        # by work-only wires, we do not perform a mapping, signaled by returning `None`.
+        if (
+            set(op_wires) == set(range(num_op_wires))
+            and meas_only_wires == set(range(num_op_wires, num_op_wires + len(meas_only_wires)))
+            and work_only_wires
+            == set(range(num_op_meas_wires, num_op_meas_wires + len(work_only_wires)))
+        ):
+            return None
 
-# TODO: Use "ParamSpecs" when min Python version is 3.10
-def make_qscript(
-    fn: Callable[..., Any], shots: Optional[ShotsLike] = None
-) -> Callable[..., QuantumScript]:
+        wire_map = {w: i for i, w in enumerate(op_wires + meas_only_wires + work_only_wires)}
+        return wire_map
+
+
+# ParamSpec is used to preserve the exact signature of the input function `fn`
+P = ParamSpec("P")
+T = TypeVar("T")
+
+
+def make_qscript(fn: Callable[P, T], shots: ShotsLike | None = None) -> Callable[P, QS]:
     """Returns a function that generates a qscript from a quantum function without any
     operation queuing taking place.
 
@@ -1398,7 +1338,7 @@ def make_qscript(
 
 
 QuantumScriptBatch = Sequence[QuantumScript]
-QuantumScriptOrBatch = Union[QuantumScript, QuantumScriptBatch]
+QuantumScriptOrBatch = QuantumScript | QuantumScriptBatch
 
 register_pytree(QuantumScript, QuantumScript._flatten, QuantumScript._unflatten)
 

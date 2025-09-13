@@ -16,15 +16,19 @@
 This submodule contains the discrete-variable quantum operations that are the
 core parametrized gates.
 """
-# pylint:disable=abstract-method,arguments-differ,protected-access,invalid-overridden-method
+# pylint: disable=arguments-differ
 import functools
-from typing import Optional, Union
 
 import numpy as np
 import scipy as sp
 
 import pennylane as qml
-from pennylane.decomposition import add_decomps, register_resources
+from pennylane.decomposition import add_decomps, register_resources, resource_rep
+from pennylane.decomposition.symbolic_decomposition import (
+    adjoint_rotation,
+    flip_zero_control,
+    pow_rotation,
+)
 from pennylane.operation import Operation
 from pennylane.typing import TensorLike
 from pennylane.wires import WiresLike
@@ -82,7 +86,7 @@ class RX(Operation):
     def generator(self) -> "qml.Hamiltonian":
         return qml.Hamiltonian([-0.5], [PauliX(wires=self.wires)])
 
-    def __init__(self, phi: TensorLike, wires: WiresLike, id: Optional[str] = None):
+    def __init__(self, phi: TensorLike, wires: WiresLike, id: str | None = None):
         super().__init__(phi, wires=wires, id=id)
 
     @property
@@ -113,7 +117,9 @@ class RX(Operation):
         c = qml.math.cos(theta / 2)
         s = qml.math.sin(theta / 2)
 
-        if qml.math.get_interface(theta) == "tensorflow":
+        if (
+            qml.math.get_interface(theta) == "tensorflow"
+        ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
             c = qml.math.cast_like(c, 1j)
             s = qml.math.cast_like(s, 1j)
 
@@ -134,7 +140,7 @@ class RX(Operation):
     def adjoint(self) -> "RX":
         return RX(-self.data[0], wires=self.wires)
 
-    def pow(self, z: Union[int, float]) -> list["qml.operation.Operator"]:
+    def pow(self, z: int | float) -> list["qml.operation.Operator"]:
         return [RX(self.data[0] * z, wires=self.wires)]
 
     def _controlled(self, wire: WiresLike) -> "qml.CRX":
@@ -175,6 +181,41 @@ def _rx_to_rz_ry(phi, wires: WiresLike, **__):
 
 
 add_decomps(RX, _rx_to_rot, _rx_to_rz_ry)
+add_decomps("Adjoint(RX)", adjoint_rotation)
+add_decomps("Pow(RX)", pow_rotation)
+
+
+def _controlled_rx_resource(*_, num_control_wires, num_work_wires, work_wire_type, **__):
+    if num_control_wires == 1:
+        return {qml.CRX: 1}
+    return {
+        qml.H: 2,
+        qml.RZ: 2,
+        resource_rep(
+            qml.MultiControlledX,
+            num_control_wires=num_control_wires,
+            num_zero_control_values=0,
+            num_work_wires=num_work_wires,
+            work_wire_type=work_wire_type,
+        ): 2,
+    }
+
+
+@register_resources(_controlled_rx_resource)
+def _controlled_rx_decomp(*params, wires, control_wires, work_wires, work_wire_type, **__):
+    if len(control_wires) == 1:
+        qml.CRX(*params, wires=wires)
+        return
+
+    qml.H(wires=wires[-1])
+    qml.RZ(params[0] / 2, wires=wires[-1])
+    qml.MultiControlledX(wires=wires, work_wires=work_wires, work_wire_type=work_wire_type)
+    qml.RZ(-params[0] / 2, wires=wires[-1])
+    qml.MultiControlledX(wires=wires, work_wires=work_wires, work_wire_type=work_wire_type)
+    qml.H(wires=wires[-1])
+
+
+add_decomps("C(RX)", flip_zero_control(_controlled_rx_decomp))
 
 
 class RY(Operation):
@@ -215,7 +256,7 @@ class RY(Operation):
     def generator(self) -> "qml.Hamiltonian":
         return qml.Hamiltonian([-0.5], [PauliY(wires=self.wires)])
 
-    def __init__(self, phi: TensorLike, wires: WiresLike, id: Optional[str] = None):
+    def __init__(self, phi: TensorLike, wires: WiresLike, id: str | None = None):
         super().__init__(phi, wires=wires, id=id)
 
     @property
@@ -247,7 +288,9 @@ class RY(Operation):
 
         c = qml.math.cos(theta / 2)
         s = qml.math.sin(theta / 2)
-        if qml.math.get_interface(theta) == "tensorflow":
+        if (
+            qml.math.get_interface(theta) == "tensorflow"
+        ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
             c = qml.math.cast_like(c, 1j)
             s = qml.math.cast_like(s, 1j)
         # The following avoids casting an imaginary quantity to reals when backpropagating
@@ -267,7 +310,7 @@ class RY(Operation):
     def adjoint(self) -> "RY":
         return RY(-self.data[0], wires=self.wires)
 
-    def pow(self, z: Union[int, float]) -> list["qml.operation.Operator"]:
+    def pow(self, z: int | float) -> list["qml.operation.Operator"]:
         return [RY(self.data[0] * z, wires=self.wires)]
 
     def _controlled(self, wire: WiresLike) -> "qml.CRY":
@@ -307,6 +350,38 @@ def _ry_to_rz_rx(phi, wires: WiresLike, **__):
 
 
 add_decomps(RY, _ry_to_rot, _ry_to_rz_rx)
+add_decomps("Adjoint(RY)", adjoint_rotation)
+add_decomps("Pow(RY)", pow_rotation)
+
+
+def _controlled_ry_resource(*_, num_control_wires, num_work_wires, work_wire_type, **__):
+    if num_control_wires == 1:
+        return {qml.CRY: 1}
+    return {
+        qml.RY: 2,
+        resource_rep(
+            qml.MultiControlledX,
+            num_control_wires=num_control_wires,
+            num_zero_control_values=0,
+            num_work_wires=num_work_wires,
+            work_wire_type=work_wire_type,
+        ): 2,
+    }
+
+
+@register_resources(_controlled_ry_resource)
+def _controlled_ry_decomp(*params, wires, control_wires, work_wires, work_wire_type, **__):
+    if len(control_wires) == 1:
+        qml.CRY(*params, wires=wires)
+        return
+
+    qml.RY(params[0] / 2, wires=wires[-1])
+    qml.MultiControlledX(wires=wires, work_wires=work_wires, work_wire_type=work_wire_type)
+    qml.RY(-params[0] / 2, wires=wires[-1])
+    qml.MultiControlledX(wires=wires, work_wires=work_wires, work_wire_type=work_wire_type)
+
+
+add_decomps("C(RY)", flip_zero_control(_controlled_ry_decomp))
 
 
 class RZ(Operation):
@@ -348,7 +423,7 @@ class RZ(Operation):
     def generator(self) -> "qml.Hamiltonian":
         return qml.Hamiltonian([-0.5], [PauliZ(wires=self.wires)])
 
-    def __init__(self, phi: TensorLike, wires: WiresLike, id: Optional[str] = None):
+    def __init__(self, phi: TensorLike, wires: WiresLike, id: str | None = None):
         super().__init__(phi, wires=wires, id=id)
 
     @staticmethod
@@ -372,7 +447,9 @@ class RZ(Operation):
         tensor([[0.9689-0.2474j, 0.0000+0.0000j],
                 [0.0000+0.0000j, 0.9689+0.2474j]])
         """
-        if qml.math.get_interface(theta) == "tensorflow":
+        if (
+            qml.math.get_interface(theta) == "tensorflow"
+        ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
             p = qml.math.exp(-0.5j * qml.math.cast_like(theta, 1j))
             z = qml.math.zeros_like(p)
 
@@ -420,7 +497,9 @@ class RZ(Operation):
         >>> qml.RZ.compute_eigvals(torch.tensor(0.5))
         tensor([0.9689-0.2474j, 0.9689+0.2474j])
         """
-        if qml.math.get_interface(theta) == "tensorflow":
+        if (
+            qml.math.get_interface(theta) == "tensorflow"
+        ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
             phase = qml.math.exp(-0.5j * qml.math.cast_like(theta, 1j))
             return qml.math.stack([phase, qml.math.conj(phase)], axis=-1)
 
@@ -438,7 +517,7 @@ class RZ(Operation):
     def resource_params(self) -> dict:
         return {}
 
-    def pow(self, z: Union[int, float]) -> list["qml.operation.Operator"]:
+    def pow(self, z: int | float) -> list["qml.operation.Operator"]:
         return [RZ(self.data[0] * z, wires=self.wires)]
 
     def _controlled(self, wire: WiresLike) -> "qml.CRZ":
@@ -478,6 +557,38 @@ def _rz_to_ry_rx(phi, wires: WiresLike, **__):
 
 
 add_decomps(RZ, _rz_to_rot, _rz_to_ry_rx)
+add_decomps("Adjoint(RZ)", adjoint_rotation)
+add_decomps("Pow(RZ)", pow_rotation)
+
+
+def _controlled_rz_resource(*_, num_control_wires, num_work_wires, work_wire_type, **__):
+    if num_control_wires == 1:
+        return {qml.CRZ: 1}
+    return {
+        qml.RZ: 2,
+        resource_rep(
+            qml.MultiControlledX,
+            num_control_wires=num_control_wires,
+            num_zero_control_values=0,
+            num_work_wires=num_work_wires,
+            work_wire_type=work_wire_type,
+        ): 2,
+    }
+
+
+@register_resources(_controlled_rz_resource)
+def _controlled_rz_decomp(*params, wires, control_wires, work_wires, work_wire_type, **__):
+    if len(control_wires) == 1:
+        qml.CRZ(*params, wires=wires)
+        return
+
+    qml.RZ(params[0] / 2, wires=wires[-1])
+    qml.MultiControlledX(wires=wires, work_wires=work_wires, work_wire_type=work_wire_type)
+    qml.RZ(-params[0] / 2, wires=wires[-1])
+    qml.MultiControlledX(wires=wires, work_wires=work_wires, work_wire_type=work_wire_type)
+
+
+add_decomps("C(RZ)", flip_zero_control(_controlled_rz_decomp))
 
 
 class PhaseShift(Operation):
@@ -523,14 +634,14 @@ class PhaseShift(Operation):
     def generator(self) -> "qml.Projector":
         return qml.Projector(np.array([1]), wires=self.wires)
 
-    def __init__(self, phi: TensorLike, wires: WiresLike, id: Optional[str] = None):
+    def __init__(self, phi: TensorLike, wires: WiresLike, id: str | None = None):
         super().__init__(phi, wires=wires, id=id)
 
     def label(
         self,
-        decimals: Optional[int] = None,
-        base_label: Optional[str] = None,
-        cache: Optional[dict] = None,
+        decimals: int | None = None,
+        base_label: str | None = None,
+        cache: dict | None = None,
     ) -> str:
         return super().label(decimals=decimals, base_label=base_label or "Rϕ", cache=cache)
 
@@ -556,7 +667,9 @@ class PhaseShift(Operation):
         tensor([[0.9689-0.2474j, 0.0000+0.0000j],
                 [0.0000+0.0000j, 0.9689+0.2474j]])
         """
-        if qml.math.get_interface(phi) == "tensorflow":
+        if (
+            qml.math.get_interface(phi) == "tensorflow"
+        ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
             p = qml.math.exp(1j * qml.math.cast_like(phi, 1j))
             ones = qml.math.ones_like(p)
             zeros = qml.math.zeros_like(p)
@@ -599,7 +712,9 @@ class PhaseShift(Operation):
         >>> qml.PhaseShift.compute_eigvals(torch.tensor(0.5))
         tensor([1.0000+0.0000j, 0.8776+0.4794j])
         """
-        if qml.math.get_interface(phi) == "tensorflow":
+        if (
+            qml.math.get_interface(phi) == "tensorflow"
+        ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
             phase = qml.math.exp(1j * qml.math.cast_like(phi, 1j))
             return stack_last([qml.math.ones_like(phase), phase])
 
@@ -637,7 +752,7 @@ class PhaseShift(Operation):
     def adjoint(self) -> "PhaseShift":
         return PhaseShift(-self.data[0], wires=self.wires)
 
-    def pow(self, z: Union[int, float]) -> list["qml.operation.Operator"]:
+    def pow(self, z: int | float) -> list["qml.operation.Operator"]:
         return [PhaseShift(self.data[0] * z, wires=self.wires)]
 
     def _controlled(self, wire: WiresLike) -> "qml.ControlledPhaseShift":
@@ -667,6 +782,8 @@ def _phaseshift_to_rz_gp(phi, wires: WiresLike, **__):
 
 
 add_decomps(PhaseShift, _phaseshift_to_rz_gp)
+add_decomps("Adjoint(PhaseShift)", adjoint_rotation)
+add_decomps("Pow(PhaseShift)", pow_rotation)
 
 
 class Rot(Operation):
@@ -723,7 +840,7 @@ class Rot(Operation):
         theta: TensorLike,
         omega: TensorLike,
         wires: WiresLike,
-        id: Optional[str] = None,
+        id: str | None = None,
     ):
         super().__init__(phi, theta, omega, wires=wires, id=id)
 
@@ -736,7 +853,7 @@ class Rot(Operation):
         phi: TensorLike,
         theta: TensorLike,
         omega: TensorLike,
-    ) -> TensorLike:  # pylint: disable=arguments-differ
+    ) -> TensorLike:
         r"""Representation of the operator as a canonical matrix in the computational basis (static method).
 
         The canonical matrix is the textbook matrix representation that does not consider wires.
@@ -769,7 +886,9 @@ class Rot(Operation):
         s = qml.math.sin(theta / 2)
 
         # If anything is not tensorflow, it has to be casted and then
-        if interface == "tensorflow":
+        if (
+            interface == "tensorflow"
+        ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
             phi = qml.math.cast_like(qml.math.asarray(phi, like=interface), 1j)
             omega = qml.math.cast_like(qml.math.asarray(omega, like=interface), 1j)
             c = qml.math.cast_like(qml.math.asarray(c, like=interface), 1j)
@@ -844,7 +963,7 @@ class Rot(Operation):
         H(0)
 
         """
-        p0, p1, p2 = [p % (4 * np.pi) for p in self.data]
+        p0, p1, p2 = (p % (4 * np.pi) for p in self.data)
 
         if _can_replace(p0, 0) and _can_replace(p1, 0) and _can_replace(p2, 0):
             return qml.Identity(wires=self.wires)
@@ -872,6 +991,51 @@ def _rot_to_rz_ry_rz(phi, theta, omega, wires: WiresLike, **__):
 
 
 add_decomps(Rot, _rot_to_rz_ry_rz)
+
+
+@register_resources({Rot: 1})
+def _adjoint_rot(phi, theta, omega, wires, **__):
+    Rot(-omega, -theta, -phi, wires=wires)
+
+
+add_decomps("Adjoint(Rot)", _adjoint_rot)
+
+
+def _controlled_rot_resource(*_, num_control_wires, num_work_wires, work_wire_type, **__):
+    if num_control_wires == 1:
+        return {qml.CRot: 1}
+    return {
+        qml.RZ: 3,
+        qml.RY: 2,
+        resource_rep(
+            qml.MultiControlledX,
+            num_control_wires=num_control_wires,
+            num_zero_control_values=0,
+            num_work_wires=num_work_wires,
+            work_wire_type=work_wire_type,
+        ): 2,
+    }
+
+
+@register_resources(_controlled_rot_resource)
+def _controlled_rot_decomp(
+    phi, theta, omega, wires, control_wires, work_wires, work_wire_type, **_
+):
+
+    if len(control_wires) == 1:
+        qml.CRot(phi, theta, omega, wires=wires)
+        return
+
+    qml.RZ((phi - omega) / 2, wires=wires[-1])
+    qml.MultiControlledX(wires=wires, work_wires=work_wires, work_wire_type=work_wire_type)
+    qml.RZ(-(phi + omega) / 2, wires=wires[-1])
+    qml.RY(-theta / 2, wires=wires[-1])
+    qml.MultiControlledX(wires=wires, work_wires=work_wires, work_wire_type=work_wire_type)
+    qml.RY(theta / 2, wires=wires[-1])
+    qml.RZ(omega, wires=wires[-1])
+
+
+add_decomps("C(Rot)", flip_zero_control(_controlled_rot_decomp))
 
 
 class U1(Operation):
@@ -916,7 +1080,7 @@ class U1(Operation):
     def generator(self) -> "qml.Projector":
         return qml.Projector(np.array([1]), wires=self.wires)
 
-    def __init__(self, phi: TensorLike, wires: WiresLike, id: Optional[str] = None):
+    def __init__(self, phi: TensorLike, wires: WiresLike, id: str | None = None):
         super().__init__(phi, wires=wires, id=id)
 
     @property
@@ -944,7 +1108,9 @@ class U1(Operation):
         tensor([[1.0000+0.0000j, 0.0000+0.0000j],
                 [0.0000+0.0000j, 0.8776+0.4794j]])
         """
-        if qml.math.get_interface(phi) == "tensorflow":
+        if (
+            qml.math.get_interface(phi) == "tensorflow"
+        ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
             phi = qml.math.cast_like(phi, 1j)
             fac = qml.math.cast_like([0, 1], 1j)
         else:
@@ -986,7 +1152,7 @@ class U1(Operation):
     def adjoint(self) -> "U1":
         return U1(-self.data[0], wires=self.wires)
 
-    def pow(self, z: Union[int, float]) -> list["qml.operation.Operator"]:
+    def pow(self, z: int | float) -> list["qml.operation.Operator"]:
         return [U1(self.data[0] * z, wires=self.wires)]
 
     def simplify(self) -> "U1":
@@ -1008,6 +1174,8 @@ def _u1_phaseshift(phi, wires, **__):
 
 
 add_decomps(U1, _u1_phaseshift)
+add_decomps("Adjoint(U1)", adjoint_rotation)
+add_decomps("Pow(U1)", pow_rotation)
 
 
 class U2(Operation):
@@ -1059,9 +1227,7 @@ class U2(Operation):
 
     resource_keys = set()
 
-    def __init__(
-        self, phi: TensorLike, delta: TensorLike, wires: WiresLike, id: Optional[str] = None
-    ):
+    def __init__(self, phi: TensorLike, delta: TensorLike, wires: WiresLike, id: str | None = None):
         super().__init__(phi, delta, wires=wires, id=id)
 
     @property
@@ -1069,9 +1235,7 @@ class U2(Operation):
         return {}
 
     @staticmethod
-    def compute_matrix(
-        phi: TensorLike, delta: TensorLike
-    ) -> TensorLike:  # pylint: disable=arguments-differ
+    def compute_matrix(phi: TensorLike, delta: TensorLike) -> TensorLike:
         r"""Representation of the operator as a canonical matrix in the computational basis (static method).
 
         The canonical matrix is the textbook matrix representation that does not consider wires.
@@ -1095,7 +1259,9 @@ class U2(Operation):
         interface = qml.math.get_interface(phi, delta)
 
         # If anything is not tensorflow, it has to be casted and then
-        if interface == "tensorflow":
+        if (
+            interface == "tensorflow"
+        ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
             phi = qml.math.cast_like(qml.math.asarray(phi, like=interface), 1j)
             delta = qml.math.cast_like(qml.math.asarray(delta, like=interface), 1j)
 
@@ -1150,7 +1316,7 @@ class U2(Operation):
         """Simplifies the gate into RX or RY gates if possible."""
         wires = self.wires
 
-        phi, delta = [p % (2 * np.pi) for p in self.data]
+        phi, delta = (p % (2 * np.pi) for p in self.data)
 
         if _can_replace(delta, 0) and _can_replace(phi, 0):
             return RY(np.pi / 2, wires=wires)
@@ -1175,6 +1341,16 @@ def _u2_phaseshift_rot(phi, delta, wires, **__):
 
 
 add_decomps(U2, _u2_phaseshift_rot)
+
+
+@register_resources({U2: 1})
+def _adjoint_u2(phi, delta, wires, **__):
+    new_delta = qml.math.mod((np.pi - phi), (2 * np.pi))
+    new_phi = qml.math.mod((np.pi - delta), (2 * np.pi))
+    U2(new_phi, new_delta, wires=wires)
+
+
+add_decomps("Adjoint(U2)", _adjoint_u2)
 
 
 class U3(Operation):
@@ -1234,7 +1410,7 @@ class U3(Operation):
         phi: TensorLike,
         delta: TensorLike,
         wires: WiresLike,
-        id: Optional[str] = None,
+        id: str | None = None,
     ):
         super().__init__(theta, phi, delta, wires=wires, id=id)
 
@@ -1243,9 +1419,7 @@ class U3(Operation):
         return {}
 
     @staticmethod
-    def compute_matrix(
-        theta: TensorLike, phi: TensorLike, delta: TensorLike
-    ) -> TensorLike:  # pylint: disable=arguments-differ
+    def compute_matrix(theta: TensorLike, phi: TensorLike, delta: TensorLike) -> TensorLike:
         r"""Representation of the operator as a canonical matrix in the computational basis (static method).
 
         The canonical matrix is the textbook matrix representation that does not consider wires.
@@ -1277,7 +1451,9 @@ class U3(Operation):
         s = qml.math.sin(theta / 2)
 
         # If anything is not tensorflow, it has to be casted and then
-        if interface == "tensorflow":
+        if (
+            interface == "tensorflow"
+        ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
             phi = qml.math.cast_like(qml.math.asarray(phi, like=interface), 1j)
             delta = qml.math.cast_like(qml.math.asarray(delta, like=interface), 1j)
             c = qml.math.cast_like(qml.math.asarray(c, like=interface), 1j)
@@ -1347,7 +1523,7 @@ class U3(Operation):
         params = self.parameters
 
         p0 = params[0] % (4 * np.pi)
-        p1, p2 = [p % (2 * np.pi) for p in params[1:]]
+        p1, p2 = (p % (2 * np.pi) for p in params[1:])
 
         if _can_replace(p0, 0) and _can_replace(p1, 0) and _can_replace(p2, 0):
             return qml.Identity(wires=wires)
@@ -1377,3 +1553,13 @@ def _u3_phaseshift_rot(theta, phi, delta, wires, **__):
 
 
 add_decomps(U3, _u3_phaseshift_rot)
+
+
+@register_resources({U3: 1})
+def _adjoint_u3(theta, phi, delta, wires, **__):
+    new_delta = qml.math.mod((np.pi - phi), (2 * np.pi))
+    new_phi = qml.math.mod((np.pi - delta), (2 * np.pi))
+    U3(theta, new_phi, new_delta, wires=wires)
+
+
+add_decomps("Adjoint(U3)", _adjoint_u3)

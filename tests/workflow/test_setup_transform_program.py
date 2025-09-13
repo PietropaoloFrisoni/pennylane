@@ -13,12 +13,11 @@
 # limitations under the License.
 """Unit tests for the `qml.workflow.resolution._setup_transform_program` helper function"""
 
+from dataclasses import replace
 from unittest.mock import MagicMock
 
-import pytest
-
 import pennylane as qml
-from pennylane.devices import ExecutionConfig, MCMConfig
+from pennylane.devices import ExecutionConfig
 from pennylane.transforms.core import TransformProgram
 from pennylane.workflow._setup_transform_program import (
     _prune_dynamic_transform,
@@ -45,37 +44,32 @@ def device_transform(tape):
 
 def test_gradient_expand_transform():
     """Test if gradient expand transform is added to the full_transform_program."""
-    config = ExecutionConfig()
-    config.gradient_method = qml.gradients.param_shift
+    config = ExecutionConfig(gradient_method=qml.gradients.param_shift)
 
     device = qml.device("default.qubit")
 
-    container = qml.transforms.core.TransformContainer(mock_user_transform)
-    user_tp = qml.transforms.core.TransformProgram((container,))
-    full_tp, _ = _setup_transform_program(user_tp, device, config)
+    full_tp, _ = _setup_transform_program(device, config)
 
-    assert repr(full_tp) == "TransformProgram(mock_user_transform, _expand_transform_param_shift)"
+    assert repr(full_tp) == "TransformProgram(_expand_transform_param_shift)"
 
 
 def test_device_transform_program():
     """Test that the device transform is correctly placed in the transform program."""
-    config = ExecutionConfig()
-    config.use_device_gradient = True
+    config = ExecutionConfig(use_device_gradient=True)
 
     container = qml.transforms.core.TransformContainer(device_transform)
     device_tp = qml.transforms.core.TransformProgram((container,))
     device = qml.device("default.qubit")
     device.preprocess_transforms = MagicMock(return_value=device_tp)
 
-    user_transform_program = TransformProgram()
-    full_tp, inner_tp = _setup_transform_program(user_transform_program, device, config)
+    full_tp, inner_tp = _setup_transform_program(device, config)
 
     assert repr(full_tp) == "TransformProgram(device_transform)"
     assert inner_tp.is_empty()
 
-    config.use_device_gradient = False
+    config = replace(config, use_device_gradient=False)
 
-    full_tp, inner_tp = _setup_transform_program(user_transform_program, device, config)
+    full_tp, inner_tp = _setup_transform_program(device, config)
 
     assert full_tp.is_empty()
     assert repr(inner_tp) == "TransformProgram(device_transform)"
@@ -126,25 +120,12 @@ def test_prune_dynamic_transform_with_mcm():
     assert len(program2) == 1
 
 
-def test_prune_dynamic_transform_warning_raised():
-    """Tests that a warning raised when a user-applied dynamic-one-shot transform is ignored."""
-
-    user_transform_program = TransformProgram()
-    user_transform_program.add_transform(qml.transforms.dynamic_one_shot)
-    device = qml.device("default.qubit")
-    config = ExecutionConfig(mcm_config=MCMConfig(mcm_method="one-shot"))
-
-    with pytest.warns(UserWarning, match="A dynamic_one_shot transform already exists"):
-        _, __ = _setup_transform_program(user_transform_program, device, config)
-
-
 def test_interface_data_not_supported():
     """Test that convert_to_numpy_parameters transform is correctly added."""
     config = ExecutionConfig(interface="autograd", gradient_method="adjoint")
     device = qml.device("default.qubit")
 
-    user_transform_program = TransformProgram()
-    full_tp, inner_tp = _setup_transform_program(user_transform_program, device, config)
+    full_tp, inner_tp = _setup_transform_program(device, config)
 
     assert full_tp.is_empty()
     assert qml.transforms.convert_to_numpy_parameters in inner_tp
@@ -156,8 +137,7 @@ def test_interface_data_supported():
 
     device = qml.device("default.mixed", wires=1)
 
-    user_transform_program = TransformProgram()
-    _, inner_tp = _setup_transform_program(user_transform_program, device, config)
+    _, inner_tp = _setup_transform_program(device, config)
 
     assert qml.transforms.convert_to_numpy_parameters not in inner_tp
 
@@ -165,8 +145,7 @@ def test_interface_data_supported():
 
     device = qml.device("default.qubit")
 
-    user_transform_program = TransformProgram()
-    _, inner_tp = _setup_transform_program(user_transform_program, device, config)
+    _, inner_tp = _setup_transform_program(device, config)
 
     assert qml.transforms.convert_to_numpy_parameters not in inner_tp
 
@@ -174,8 +153,7 @@ def test_interface_data_supported():
 
     device = qml.device("default.qubit")
 
-    user_transform_program = TransformProgram()
-    _, inner_tp = _setup_transform_program(user_transform_program, device, config)
+    _, inner_tp = _setup_transform_program(device, config)
 
     assert qml.transforms.convert_to_numpy_parameters not in inner_tp
 
@@ -183,7 +161,7 @@ def test_interface_data_supported():
         convert_to_numpy=False, interface="jax", gradient_method=qml.gradients.param_shift
     )
 
-    _, inner_tp = _setup_transform_program(TransformProgram(), device, config)
+    _, inner_tp = _setup_transform_program(device, config)
     assert qml.transforms.convert_to_numpy_parameters not in inner_tp
 
 
@@ -193,15 +171,12 @@ def test_cache_handling():
     device = qml.device("default.qubit")
     device.preprocess_transforms = MagicMock(return_value=TransformProgram())
 
-    user_transform_program = TransformProgram()
-    full_tp, inner_tp = _setup_transform_program(user_transform_program, device, config, cache=True)
+    full_tp, inner_tp = _setup_transform_program(device, config, cache=True)
 
     assert repr(inner_tp) == "TransformProgram(_cache_transform)"
     assert full_tp.is_empty()
 
-    full_tp, inner_tp = _setup_transform_program(
-        user_transform_program, device, config, cache=False
-    )
+    full_tp, inner_tp = _setup_transform_program(device, config, cache=False)
 
     assert full_tp.is_empty()
     assert inner_tp.is_empty()

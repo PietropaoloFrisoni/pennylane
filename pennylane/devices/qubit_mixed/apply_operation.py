@@ -16,7 +16,6 @@
 
 from functools import singledispatch
 from string import ascii_letters as alphabet
-from typing import Union
 
 import numpy as np
 
@@ -28,7 +27,7 @@ from pennylane.ops.qubit.attributes import diagonal_in_z_basis
 
 from .einsum_manpulation import get_einsum_mapping
 
-alphabet_array = np.array(list(alphabet))
+alphabet_array = math.array(list(alphabet))
 
 TENSORDOT_STATE_NDIM_PERF_THRESHOLD = 9
 
@@ -423,7 +422,9 @@ def apply_pauliz(op: qml.Z, state, is_state_batched: bool = False, debugger=None
     num_wires = int((len(math.shape(state)) - is_state_batched) / 2)
     n_dim = math.ndim(state)
 
-    if n_dim >= TENSORDOT_STATE_NDIM_PERF_THRESHOLD and math.get_interface(state) == "tensorflow":
+    if (
+        n_dim >= TENSORDOT_STATE_NDIM_PERF_THRESHOLD and math.get_interface(state) == "tensorflow"
+    ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
         return apply_operation_tensordot(op, state, is_state_batched=is_state_batched)
 
     # First, flip the left side
@@ -443,7 +444,9 @@ def apply_T(op: qml.T, state, is_state_batched: bool = False, debugger=None, **_
     num_wires = int((len(math.shape(state)) - is_state_batched) / 2)
     n_dim = math.ndim(state)
 
-    if n_dim >= TENSORDOT_STATE_NDIM_PERF_THRESHOLD and math.get_interface(state) == "tensorflow":
+    if (
+        n_dim >= TENSORDOT_STATE_NDIM_PERF_THRESHOLD and math.get_interface(state) == "tensorflow"
+    ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
         return apply_operation_tensordot(op, state, is_state_batched=is_state_batched)
 
     # First, flip the left side
@@ -463,7 +466,9 @@ def apply_S(op: qml.S, state, is_state_batched: bool = False, debugger=None, **_
     num_wires = int((len(math.shape(state)) - is_state_batched) / 2)
     n_dim = math.ndim(state)
 
-    if n_dim >= TENSORDOT_STATE_NDIM_PERF_THRESHOLD and math.get_interface(state) == "tensorflow":
+    if (
+        n_dim >= TENSORDOT_STATE_NDIM_PERF_THRESHOLD and math.get_interface(state) == "tensorflow"
+    ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
         return apply_operation_tensordot(op, state, is_state_batched=is_state_batched)
 
     # First, flip the left side
@@ -483,7 +488,9 @@ def apply_phaseshift(op: qml.PhaseShift, state, is_state_batched: bool = False, 
     num_wires = int((len(math.shape(state)) - is_state_batched) / 2)
     n_dim = math.ndim(state)
 
-    if n_dim >= TENSORDOT_STATE_NDIM_PERF_THRESHOLD and math.get_interface(state) == "tensorflow":
+    if (
+        n_dim >= TENSORDOT_STATE_NDIM_PERF_THRESHOLD and math.get_interface(state) == "tensorflow"
+    ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
         return apply_operation_tensordot(op, state, is_state_batched=is_state_batched)
 
     # Common constants always needed
@@ -550,15 +557,7 @@ SYMMETRIC_REAL_OPS = (
 
 
 def apply_symmetric_real_op(
-    op: Union[
-        qml.CNOT,
-        qml.MultiControlledX,
-        qml.Toffoli,
-        qml.SWAP,
-        qml.CSWAP,
-        qml.CZ,
-        qml.CH,
-    ],
+    op: qml.CNOT | qml.MultiControlledX | qml.Toffoli | qml.SWAP | qml.CSWAP | qml.CZ | qml.CH,
     state,
     is_state_batched: bool = False,
     debugger=None,
@@ -678,7 +677,10 @@ def apply_snapshot(
         measurement = op.hyperparameters.get(
             "measurement", None
         )  # default: None, meaning no measurement, simply copy the state
-        shots = execution_kwargs.get("tape_shots", None)  # default: None, analytic
+        if op.hyperparameters["shots"] == "workflow":
+            shots = execution_kwargs.get("tape_shots")
+        else:
+            shots = op.hyperparameters["shots"]
 
         if isinstance(measurement, qml.measurements.StateMP) or not shots:
             snapshot = qml.devices.qubit_mixed.measure(measurement, state, is_state_batched)
@@ -690,7 +692,7 @@ def apply_snapshot(
                 is_state_batched,
                 execution_kwargs.get("rng"),
                 execution_kwargs.get("prng_key"),
-            )
+            )[0]
 
         # Store snapshot with optional tag
         if op.tag:
@@ -701,7 +703,6 @@ def apply_snapshot(
     return state
 
 
-# pylint: disable=unused-argument
 @apply_operation.register
 def apply_density_matrix(
     op: qml.QubitDensityMatrix,

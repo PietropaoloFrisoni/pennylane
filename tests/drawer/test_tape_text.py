@@ -16,6 +16,8 @@ Unit tests for the `pennylane.draw_text` function.
 """
 # pylint: disable=import-outside-toplevel
 
+from copy import copy
+
 import pytest
 
 import pennylane as qml
@@ -100,7 +102,7 @@ class TestHelperFunctions:  # pylint: disable=too-many-arguments, too-many-posit
         config = _Config(
             wire_map=default_wire_map, bit_map=default_bit_map, num_op_layers=4, cur_layer=0
         )
-        assert out == _add_grouping_symbols(op, ["", "", "", ""], config)
+        assert out == _add_grouping_symbols(op.wires, ["", "", "", ""], config)
 
     @pytest.mark.parametrize(
         "op, bit_map, layer_str, out",
@@ -292,6 +294,8 @@ class TestHelperFunctions:  # pylint: disable=too-many-arguments, too-many-posit
             (qml.Snapshot(), ["─|Snap|", "─|Snap|", "─|Snap|", "─|Snap|"]),
             (qml.Barrier(), ["─||", "─||", "─||", "─||"]),
             (qml.S(0) @ qml.T(0), ["─S@T", "─", "─", "─"]),
+            (qml.TemporaryAND([0, 1, 3]), ["╭●", "├●", "│", "╰─"]),
+            (qml.TemporaryAND([1, 0, 3], control_values=(0, 1)), ["╭●", "├○", "│", "╰─"]),
         ],
     )
     def test_add_obj(self, op, out):
@@ -399,6 +403,50 @@ class TestHelperFunctions:  # pylint: disable=too-many-arguments, too-many-posit
         assert qml.math.allclose(cache["matrices"][0], np.eye(2))
         op2 = qml.QubitUnitary(np.eye(2), wires=1)
         assert _add_obj(op2, ["", ""], config) == ["", "U(M0)"]
+
+    @pytest.mark.parametrize("wires", [tuple(), (0, 1), (0, 1, 2, 3)])
+    @pytest.mark.parametrize("wire_map", [default_wire_map, {0: 0, 1: 1}])
+    @pytest.mark.parametrize("cls, label", [(qml.GlobalPhase, "GlobalPhase"), (qml.Identity, "I")])
+    def test_add_global_op(self, wires, wire_map, cls, label):
+        """Test that adding a global op works as expected."""
+        data = [0.5124][: cls.num_params]
+        op = cls(*data, wires=wires)
+        # Expected output does not depend on the wires of GlobalPhase but just
+        # on the number of drawn wires as dictated by the config!
+        n_wires = len(wire_map)
+        expected = [f"╭{label}"] + [f"├{label}"] * (n_wires - 2) + [f"╰{label}"]
+        config = _Config(wire_map=wire_map, bit_map=default_bit_map, num_op_layers=4, cur_layer=1)
+        out = _add_obj(op, ["─"] * n_wires, config)
+        assert expected == out
+
+    @pytest.mark.parametrize(
+        "wires, control_wires, expected",
+        [
+            (tuple(), (0,), ["╭●", "├label", "├label", "╰label"]),
+            (tuple(), (2,), ["╭label", "├label", "├●", "╰label"]),
+            ((2,), (0, 1, 3), ["╭●", "├●", "├label", "╰●"]),
+            ((0, 1), (3,), ["╭label", "├label", "├label", "╰●"]),
+            ((0, 2), (1, 3), ["╭label", "├●", "├label", "╰●"]),
+            ((0, 1, 3), (2,), ["╭label", "├label", "├●", "╰label"]),
+        ],
+    )
+    @pytest.mark.parametrize("wire_map", [default_wire_map, {i: i for i in range(6)}])
+    @pytest.mark.parametrize("cls, label", [(qml.GlobalPhase, "GlobalPhase"), (qml.Identity, "I")])
+    def test_add_controlled_global_op(self, wires, control_wires, expected, wire_map, cls, label):
+        """Test that adding a controlled global op works as expected."""
+        expected = copy(expected)
+        data = [0.5124][: cls.num_params]
+        op = qml.ctrl(cls(*data, wires=wires), control=control_wires)
+        n_wires = len(wire_map)
+        if n_wires > 4:
+            expected[-1] = "├" + expected[-1][1:]
+            expected.extend(["├label"] * (n_wires - 5))
+            expected.append("╰label")
+
+        expected = [line.replace("label", label) for line in expected]
+        config = _Config(wire_map=wire_map, bit_map=default_bit_map, num_op_layers=4, cur_layer=1)
+        out = _add_obj(op, ["─"] * n_wires, config)
+        assert expected == out
 
 
 class TestEmptyTapes:
@@ -533,14 +581,17 @@ class TestMaxLength:
 
         tape_ml = qml.tape.QuantumScript.from_queue(q_tape_ml)
         out = tape_text(tape_ml)
+
         assert 95 <= max(len(s) for s in out.split("\n")) <= 100
 
-    @pytest.mark.parametrize("ml", [10, 15, 20])
+    # We choose values of max_length that allow us to include continuation dots
+    # when the circuit is partitioned
+    @pytest.mark.parametrize("ml", [25, 50, 75])
     def test_setting_max_length(self, ml):
         """Test several custom max_length parameters change the wrapping length."""
 
         with qml.queuing.AnnotatedQueue() as q_tape_ml:
-            for _ in range(10):
+            for _ in range(50):
                 qml.PauliX(0)
                 qml.PauliY(1)
 
@@ -549,6 +600,7 @@ class TestMaxLength:
 
         tape_ml = qml.tape.QuantumScript.from_queue(q_tape_ml)
         out = tape_text(tape_ml, max_length=ml)
+
         assert max(len(s) for s in out.split("\n")) <= ml
 
 
@@ -625,6 +677,14 @@ single_op_tests_data = [
         ),
         "0: ─╭○─┤  \n1: ─├●─┤  \n2: ─├○─┤  \n3: ─├●─┤  \n4: ─╰Y─┤  ",
     ),
+    (
+        qml.TemporaryAND([3, 0, 2], control_values=(1, 0)),
+        "3: ─╭●─┤  \n0: ─├○─┤  \n2: ─╰──┤  ",
+    ),
+    (
+        qml.adjoint(qml.TemporaryAND([3, 0, 2], control_values=(0, 1))),
+        "3: ──○╮─┤  \n0: ──●┤─┤  \n2: ───╯─┤  ",
+    ),
 ]
 
 
@@ -676,6 +736,31 @@ class TestLayering:
         expected = "0: ──X─╭IsingXX────┤  \n1: ────│─────────X─┤  \n2: ────╰IsingXX────┤  "
 
         assert tape_text(_tape, wire_order=[0, 1, 2]) == expected
+
+    def test_multiple_elbows(self):
+        """Test that multiple elbows are drawn correctly."""
+        _tape = qml.tape.QuantumScript(
+            [
+                qml.TemporaryAND(["a", "b", "c"]),
+                qml.adjoint(qml.TemporaryAND(["f", "d", "e"])),
+                qml.adjoint(qml.TemporaryAND(["a", "d", "b"], control_values=(0, 0))),
+                qml.TemporaryAND(["e", "h", "f"], control_values=(0, 1)),
+            ]
+        )
+        expected = (
+            "a: ─╭●───○╮─┤  \n"
+            "b: ─├●────┤─┤  \n"
+            "c: ─╰─────│─┤  \n"
+            "d: ──●╮──○╯─┤  \n"
+            "e: ───┤─╭○──┤  \n"
+            "f: ──●╯─├───┤  \n"
+            "g: ─────│───┤  \n"
+            "h: ─────╰●──┤  "
+        )
+        out = tape_text(
+            _tape, wire_order=["a", "b", "c", "d", "e", "f", "g", "h"], show_all_wires=True
+        )
+        assert out == expected
 
 
 tape_matrices = qml.tape.QuantumScript(

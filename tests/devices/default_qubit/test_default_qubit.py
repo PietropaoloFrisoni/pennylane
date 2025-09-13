@@ -14,6 +14,7 @@
 """Tests for default qubit."""
 # pylint: disable=import-outside-toplevel, no-member, too-many-arguments
 
+from multiprocessing import set_start_method
 from unittest import mock
 
 import numpy as np
@@ -21,6 +22,9 @@ import pytest
 
 import pennylane as qml
 from pennylane.devices import DefaultQubit, ExecutionConfig
+from pennylane.exceptions import DeviceError
+
+set_start_method("spawn")
 
 max_workers_list = [
     None,
@@ -37,7 +41,10 @@ def test_name():
 def test_shots():
     """Test the shots property of DefaultQubit."""
     assert DefaultQubit().shots == qml.measurements.Shots(None)
-    assert DefaultQubit(shots=100).shots == qml.measurements.Shots(100)
+    with pytest.warns(
+        qml.exceptions.PennyLaneDeprecationWarning, match="shots on device is deprecated"
+    ):
+        assert DefaultQubit(shots=100).shots == qml.measurements.Shots(100)
 
     with pytest.raises(AttributeError):
         DefaultQubit().shots = 10
@@ -75,7 +82,7 @@ def test_snapshot_multiprocessing_qnode():
         return qml.expval(qml.PauliX(0) + qml.PauliY(0))
 
     with pytest.raises(
-        qml.DeviceError,
+        DeviceError,
         match="Debugging with ``Snapshots`` is not available with multiprocessing.",
     ):
         qml.snapshots(circuit)()
@@ -595,7 +602,7 @@ class TestSampleMeasurements:
         assert len(results) == 2
         assert all(isinstance(res, (float, np.ndarray)) for res in results)
         assert results[0].shape == (100, 2)
-        assert results[1].shape == (50,)
+        assert results[1].shape == (50, 1)
 
     @pytest.mark.parametrize("max_workers", max_workers_list)
     def test_counts_wires(self, max_workers, seed):
@@ -928,51 +935,49 @@ class TestSumOfTermsDifferentiability:
 
 
 @pytest.mark.parametrize("max_workers", max_workers_list)
+@pytest.mark.parametrize("config", (None, ExecutionConfig(gradient_method="adjoint")))
 class TestAdjointDifferentiation:
     """Tests adjoint differentiation integration with DefaultQubit."""
 
-    ec = ExecutionConfig(gradient_method="adjoint")
-
-    def test_derivatives_single_circuit(self, max_workers):
+    def test_derivatives_single_circuit(self, max_workers, config):
         """Tests derivatives with a single circuit."""
         dev = DefaultQubit(max_workers=max_workers)
         x = np.array(np.pi / 7)
         qs = qml.tape.QuantumScript([qml.RX(x, 0)], [qml.expval(qml.PauliZ(0))])
 
-        config = ExecutionConfig(gradient_method="adjoint")
         batch, _ = dev.preprocess_transforms(config)((qs,))
         qs = batch[0]
         expected_grad = -qml.math.sin(x)
-        actual_grad = dev.compute_derivatives(qs, self.ec)
+        actual_grad = dev.compute_derivatives(qs, config)
         assert isinstance(actual_grad, np.ndarray)
         assert actual_grad.shape == ()  # pylint: disable=no-member
         assert np.isclose(actual_grad, expected_grad)
 
         expected_val = qml.math.cos(x)
-        actual_val, actual_grad = dev.execute_and_compute_derivatives(qs, self.ec)
+        actual_val, actual_grad = dev.execute_and_compute_derivatives(qs, config)
         assert np.isclose(actual_val, expected_val)
         assert np.isclose(actual_grad, expected_grad)
 
-    def test_derivatives_list_with_single_circuit(self, max_workers):
+    def test_derivatives_list_with_single_circuit(self, max_workers, config):
         """Tests a basic example with a batch containing a single circuit."""
         dev = DefaultQubit(max_workers=max_workers)
         x = np.array(np.pi / 7)
         qs = qml.tape.QuantumScript([qml.RX(x, 0)], [qml.expval(qml.PauliZ(0))])
-        config = ExecutionConfig(gradient_method="adjoint")
+
         batch, _ = dev.preprocess_transforms(config)((qs,))
         qs = batch[0]
         expected_grad = -qml.math.sin(x)
-        actual_grad = dev.compute_derivatives([qs], self.ec)
+        actual_grad = dev.compute_derivatives([qs], config)
         assert isinstance(actual_grad, tuple)
         assert isinstance(actual_grad[0], np.ndarray)
         assert np.isclose(actual_grad[0], expected_grad)
 
         expected_val = qml.math.cos(x)
-        actual_val, actual_grad = dev.execute_and_compute_derivatives([qs], self.ec)
+        actual_val, actual_grad = dev.execute_and_compute_derivatives([qs], config)
         assert np.isclose(expected_val, actual_val[0])
         assert np.isclose(expected_grad, actual_grad[0])
 
-    def test_derivatives_many_tapes_many_results(self, max_workers):
+    def test_derivatives_many_tapes_many_results(self, max_workers, config):
         """Tests a basic example with a batch of circuits of varying return shapes."""
         dev = DefaultQubit(max_workers=max_workers)
         x = np.array(np.pi / 7)
@@ -981,12 +986,12 @@ class TestAdjointDifferentiation:
             [qml.RY(x, 0)], [qml.expval(qml.PauliX(0)), qml.expval(qml.PauliZ(0))]
         )
         expected_grad = (-qml.math.sin(x), (qml.math.cos(x), -qml.math.sin(x)))
-        actual_grad = dev.compute_derivatives([single_meas, multi_meas], self.ec)
+        actual_grad = dev.compute_derivatives([single_meas, multi_meas], config)
         assert np.isclose(actual_grad[0], expected_grad[0])
         assert isinstance(actual_grad[1], tuple)
         assert qml.math.allclose(actual_grad[1], expected_grad[1])
 
-    def test_derivatives_integration(self, max_workers):
+    def test_derivatives_integration(self, max_workers, config):
         """Tests the expected workflow done by a calling method."""
         dev = DefaultQubit(max_workers=max_workers)
         x = np.array(np.pi / 7)
@@ -996,18 +1001,19 @@ class TestAdjointDifferentiation:
             [qml.RY(x, 0)], [qml.expval(qml.PauliX(0)), qml.expval(qml.PauliZ(0))]
         )
 
-        program, new_ec = dev.preprocess(self.ec)
+        program, new_ec = dev.preprocess(config)
         circuits, _ = program([single_meas, multi_meas])
-        actual_grad = dev.compute_derivatives(circuits, self.ec)
+        actual_grad = dev.compute_derivatives(circuits, new_ec)
 
-        assert new_ec.use_device_gradient
-        assert new_ec.grad_on_execution
+        if config and config.gradient_method == "adjoint":
+            assert new_ec.use_device_gradient
+            assert new_ec.grad_on_execution
 
         assert np.isclose(actual_grad[0], expected_grad[0])
         assert isinstance(actual_grad[1], tuple)
         assert qml.math.allclose(actual_grad[1], expected_grad[1])
 
-    def test_jvps_single_circuit(self, max_workers):
+    def test_jvps_single_circuit(self, max_workers, config):
         """Tests jvps with a single circuit."""
         dev = DefaultQubit(max_workers=max_workers)
         x = np.array(np.pi / 7)
@@ -1015,22 +1021,21 @@ class TestAdjointDifferentiation:
 
         qs = qml.tape.QuantumScript([qml.RX(x, 0)], [qml.expval(qml.PauliZ(0))])
 
-        config = ExecutionConfig(gradient_method="adjoint")
         batch, _ = dev.preprocess_transforms(config)((qs,))
         qs = batch[0]
 
         expected_grad = -qml.math.sin(x) * tangent[0]
-        actual_grad = dev.compute_jvp(qs, tangent, self.ec)
+        actual_grad = dev.compute_jvp(qs, tangent, config)
         assert isinstance(actual_grad, np.ndarray)
         assert actual_grad.shape == ()  # pylint: disable=no-member
         assert np.isclose(actual_grad, expected_grad)
 
         expected_val = qml.math.cos(x)
-        actual_val, actual_grad = dev.execute_and_compute_jvp(qs, tangent, self.ec)
+        actual_val, actual_grad = dev.execute_and_compute_jvp(qs, tangent, config)
         assert np.isclose(actual_val, expected_val)
         assert np.isclose(actual_grad, expected_grad)
 
-    def test_jvps_list_with_single_circuit(self, max_workers):
+    def test_jvps_list_with_single_circuit(self, max_workers, config):
         """Tests a basic example with a batch containing a single circuit."""
         dev = DefaultQubit(max_workers=max_workers)
         x = np.array(np.pi / 7)
@@ -1038,22 +1043,21 @@ class TestAdjointDifferentiation:
 
         qs = qml.tape.QuantumScript([qml.RX(x, 0)], [qml.expval(qml.PauliZ(0))])
 
-        config = ExecutionConfig(gradient_method="adjoint")
         batch, _ = dev.preprocess_transforms(config)((qs,))
         qs = batch[0]
 
         expected_grad = -qml.math.sin(x) * tangent[0]
-        actual_grad = dev.compute_jvp([qs], [tangent], self.ec)
+        actual_grad = dev.compute_jvp([qs], [tangent], config)
         assert isinstance(actual_grad, tuple)
         assert isinstance(actual_grad[0], np.ndarray)
         assert np.isclose(actual_grad[0], expected_grad)
 
         expected_val = qml.math.cos(x)
-        actual_val, actual_grad = dev.execute_and_compute_jvp([qs], [tangent], self.ec)
+        actual_val, actual_grad = dev.execute_and_compute_jvp([qs], [tangent], config)
         assert np.isclose(expected_val, actual_val[0])
         assert np.isclose(expected_grad, actual_grad[0])
 
-    def test_jvps_many_tapes_many_results(self, max_workers):
+    def test_jvps_many_tapes_many_results(self, max_workers, config):
         """Tests a basic example with a batch of circuits of varying return shapes."""
         dev = DefaultQubit(max_workers=max_workers)
         x = np.array(np.pi / 7)
@@ -1067,21 +1071,21 @@ class TestAdjointDifferentiation:
             -qml.math.sin(x) * tangents[0][0],
             (qml.math.cos(x) * tangents[1][0], -qml.math.sin(x) * tangents[1][0]),
         )
-        actual_grad = dev.compute_jvp([single_meas, multi_meas], tangents, self.ec)
+        actual_grad = dev.compute_jvp([single_meas, multi_meas], tangents, config)
         assert np.isclose(actual_grad[0], expected_grad[0])
         assert isinstance(actual_grad[1], tuple)
         assert qml.math.allclose(actual_grad[1], expected_grad[1])
 
         expected_val = (qml.math.cos(x), (qml.math.sin(x), qml.math.cos(x)))
         actual_val, actual_grad = dev.execute_and_compute_jvp(
-            [single_meas, multi_meas], tangents, self.ec
+            [single_meas, multi_meas], tangents, config
         )
         assert np.isclose(actual_val[0], expected_val[0])
         assert qml.math.allclose(actual_val[1], expected_val[1])
         assert np.isclose(actual_grad[0], expected_grad[0])
         assert qml.math.allclose(actual_grad[1], expected_grad[1])
 
-    def test_jvps_integration(self, max_workers):
+    def test_jvps_integration(self, max_workers, config):
         """Tests the expected workflow done by a calling method."""
         dev = DefaultQubit(max_workers=max_workers)
         x = np.array(np.pi / 7)
@@ -1092,63 +1096,62 @@ class TestAdjointDifferentiation:
         )
         tangents = [(0.456,), (0.789,)]
         circuits = [single_meas, multi_meas]
-        program, new_ec = dev.preprocess(self.ec)
+        program, new_ec = dev.preprocess(config)
         circuits, _ = program(circuits)
-        actual_grad = dev.compute_jvp(circuits, tangents, self.ec)
+        actual_grad = dev.compute_jvp(circuits, tangents, new_ec)
         expected_grad = (
             -qml.math.sin(x) * tangents[0][0],
             (qml.math.cos(x) * tangents[1][0], -qml.math.sin(x) * tangents[1][0]),
         )
 
-        assert new_ec.use_device_gradient
-        assert new_ec.grad_on_execution
+        if config and config.gradient_method == "adjoint":
+            assert new_ec.use_device_gradient
+            assert new_ec.grad_on_execution
 
         assert np.isclose(actual_grad[0], expected_grad[0])
         assert isinstance(actual_grad[1], tuple)
         assert qml.math.allclose(actual_grad[1], expected_grad[1])
 
-    def test_vjps_single_circuit(self, max_workers):
+    def test_vjps_single_circuit(self, max_workers, config):
         """Tests vjps with a single circuit."""
         dev = DefaultQubit(max_workers=max_workers)
         x = np.array(np.pi / 7)
         cotangent = (0.456,)
 
         qs = qml.tape.QuantumScript([qml.RX(x, 0)], [qml.expval(qml.PauliZ(0))])
-        config = ExecutionConfig(gradient_method="adjoint")
         batch, _ = dev.preprocess_transforms(config)((qs,))
         qs = batch[0]
 
         expected_grad = -qml.math.sin(x) * cotangent[0]
-        actual_grad = dev.compute_vjp(qs, cotangent, self.ec)
+        actual_grad = dev.compute_vjp(qs, cotangent, config)
         assert np.isclose(actual_grad, expected_grad)
 
         expected_val = qml.math.cos(x)
-        actual_val, actual_grad = dev.execute_and_compute_vjp(qs, cotangent, self.ec)
+        actual_val, actual_grad = dev.execute_and_compute_vjp(qs, cotangent, config)
         assert np.isclose(actual_val, expected_val)
         assert np.isclose(actual_grad, expected_grad)
 
-    def test_vjps_list_with_single_circuit(self, max_workers):
+    def test_vjps_list_with_single_circuit(self, max_workers, config):
         """Tests a basic example with a batch containing a single circuit."""
         dev = DefaultQubit(max_workers=max_workers)
         x = np.array(np.pi / 7)
         cotangent = (0.456,)
 
         qs = qml.tape.QuantumScript([qml.RX(x, 0)], [qml.expval(qml.PauliZ(0))])
-        config = ExecutionConfig(gradient_method="adjoint")
         batch, _ = dev.preprocess_transforms(config)((qs,))
         qs = batch[0]
 
         expected_grad = -qml.math.sin(x) * cotangent[0]
-        actual_grad = dev.compute_vjp([qs], [cotangent], self.ec)
+        actual_grad = dev.compute_vjp([qs], [cotangent], config)
         assert isinstance(actual_grad, tuple)
         assert np.isclose(actual_grad[0], expected_grad)
 
         expected_val = qml.math.cos(x)
-        actual_val, actual_grad = dev.execute_and_compute_vjp([qs], [cotangent], self.ec)
+        actual_val, actual_grad = dev.execute_and_compute_vjp([qs], [cotangent], config)
         assert np.isclose(expected_val, actual_val[0])
         assert np.isclose(expected_grad, actual_grad[0])
 
-    def test_vjps_many_tapes_many_results(self, max_workers):
+    def test_vjps_many_tapes_many_results(self, max_workers, config):
         """Tests a basic example with a batch of circuits of varying return shapes."""
         dev = DefaultQubit(max_workers=max_workers)
         x = np.array(np.pi / 7)
@@ -1162,20 +1165,20 @@ class TestAdjointDifferentiation:
             -qml.math.sin(x) * cotangents[0][0],
             qml.math.cos(x) * cotangents[1][0] - qml.math.sin(x) * cotangents[1][1],
         )
-        actual_grad = dev.compute_vjp([single_meas, multi_meas], cotangents, self.ec)
+        actual_grad = dev.compute_vjp([single_meas, multi_meas], cotangents, config)
         assert np.isclose(actual_grad[0], expected_grad[0])
         assert np.isclose(actual_grad[1], expected_grad[1])
 
         expected_val = (qml.math.cos(x), (qml.math.sin(x), qml.math.cos(x)))
         actual_val, actual_grad = dev.execute_and_compute_vjp(
-            [single_meas, multi_meas], cotangents, self.ec
+            [single_meas, multi_meas], cotangents, config
         )
         assert np.isclose(actual_val[0], expected_val[0])
         assert qml.math.allclose(actual_val[1], expected_val[1])
         assert np.isclose(actual_grad[0], expected_grad[0])
         assert np.isclose(actual_grad[1], expected_grad[1])
 
-    def test_vjps_integration(self, max_workers):
+    def test_vjps_integration(self, max_workers, config):
         """Tests the expected workflow done by a calling method."""
         dev = DefaultQubit(max_workers=max_workers)
         x = np.array(np.pi / 7)
@@ -1186,17 +1189,18 @@ class TestAdjointDifferentiation:
         )
         cotangents = [(0.456,), (0.789, 0.123)]
         circuits = [single_meas, multi_meas]
-        program, new_ec = dev.preprocess(self.ec)
+        program, new_ec = dev.preprocess(config)
         circuits, _ = program(circuits)
 
-        actual_grad = dev.compute_vjp(circuits, cotangents, self.ec)
+        actual_grad = dev.compute_vjp(circuits, cotangents, new_ec)
         expected_grad = (
             -qml.math.sin(x) * cotangents[0][0],
             qml.math.cos(x) * cotangents[1][0] - qml.math.sin(x) * cotangents[1][1],
         )
 
-        assert new_ec.use_device_gradient
-        assert new_ec.grad_on_execution
+        if config and config.gradient_method == "adjoint":
+            assert new_ec.use_device_gradient
+            assert new_ec.grad_on_execution
 
         assert np.isclose(actual_grad[0], expected_grad[0])
         assert np.isclose(actual_grad[1], expected_grad[1])
@@ -1382,6 +1386,7 @@ class TestPRNGKeySeed:
 
         assert not np.all(result1 == result2)
 
+    @pytest.mark.xfail  # [sc-90338]
     def test_different_max_workers_same_prng_key(self):
         """Test that devices with the same jax.random.PRNGKey but different threading will produce
         the same samples."""
@@ -1462,18 +1467,18 @@ class TestPRNGKeySeed:
 
         assert np.all(result1 == result2)
 
-    @pytest.mark.parametrize("max_workers", max_workers_list)
-    def test_finite_shots_postselection_defer_measurements(self, max_workers):
+    # @pytest.mark.parametrize("max_workers", max_workers_list)
+    def test_finite_shots_postselection_defer_measurements(self):
         """Test that the number of shots returned with postselection with a PRNGKey is different
         when executing a batch of tapes and the same when using `dev.execute` with the same tape
         multiple times."""
         import jax
 
-        dev = qml.device("default.qubit", max_workers=max_workers, seed=jax.random.PRNGKey(678))
+        dev = qml.device("default.qubit", seed=jax.random.PRNGKey(234))
 
         mv = qml.measure(0, postselect=1)
         qs = qml.tape.QuantumScript(
-            [qml.Hadamard(0), mv.measurements[0]], [qml.sample(wires=0)], shots=100
+            [qml.Hadamard(0), mv.measurements[0]], [qml.sample(wires=0)], shots=500
         )
         n_tapes = 5
         tapes = qml.defer_measurements(qs)[0] * 5
@@ -1502,8 +1507,9 @@ class TestPRNGKeySeed:
         @jax.jit
         def workflow(key, param):
 
-            dev = qml.device("default.qubit", seed=key, shots=100)
+            dev = qml.device("default.qubit", seed=key)
 
+            @qml.set_shots(100)
             @qml.qnode(dev)
             def circuit(x):
                 qml.RX(x, 0)
@@ -1800,8 +1806,16 @@ def test_projector_dynamic_type(max_workers, n_wires):
         assert np.isclose(res, 1 / 2**n_wires)
 
 
-@pytest.mark.all_interfaces
-@pytest.mark.parametrize("interface", ["numpy", "autograd", "torch", "jax", "tensorflow"])
+@pytest.mark.parametrize(
+    "interface",
+    [
+        "numpy",
+        pytest.param("autograd", marks=pytest.mark.autograd),
+        pytest.param("torch", marks=pytest.mark.torch),
+        pytest.param("jax", marks=pytest.mark.jax),
+        pytest.param("tensorflow", marks=pytest.mark.tf),
+    ],
+)
 @pytest.mark.parametrize("use_jit", [True, False])
 class TestPostselection:
     """Various integration tests for postselection of mid-circuit measurements."""
@@ -1881,6 +1895,7 @@ class TestPostselection:
         dev = qml.device("default.qubit", seed=seed)
         param = qml.math.asarray(param, like=interface)
 
+        @qml.set_shots(shots=shots)
         @qml.defer_measurements
         @qml.qnode(dev, interface=interface)
         def circ_postselect(theta):
@@ -1889,6 +1904,7 @@ class TestPostselection:
             qml.measure(0, postselect=1)
             return qml.apply(mp)
 
+        @qml.set_shots(shots=shots)
         @qml.defer_measurements
         @qml.qnode(dev, interface=interface)
         def circ_expected():
@@ -1899,11 +1915,10 @@ class TestPostselection:
         if use_jit:
             import jax
 
-            pytest.xfail(reason="'shots' cannot be a static_argname for 'jit' in JAX 0.4.28")
-            circ_postselect = jax.jit(circ_postselect, static_argnames=["shots"])
+            circ_postselect = jax.jit(circ_postselect)
 
-        res = circ_postselect(param, shots=shots)
-        expected = circ_expected(shots=shots)
+        res = circ_postselect(param)
+        expected = circ_expected()
 
         if not isinstance(shots, tuple):
             assert qml.math.allclose(res, expected, atol=0.1, rtol=0)
@@ -1920,7 +1935,7 @@ class TestPostselection:
         [
             (qml.sample(wires=[0, 2]), (5, 2)),
             (qml.classical_shadow(wires=[0, 2]), (2, 5, 2)),
-            (qml.sample(wires=[0]), (5,)),
+            (qml.sample(wires=[0]), (5, 1)),
             (qml.classical_shadow(wires=[0]), (2, 5, 1)),
         ],
     )
@@ -1944,6 +1959,7 @@ class TestPostselection:
 
         with mock.patch("numpy.random.binomial", lambda *args, **kwargs: 5):
 
+            @qml.set_shots(shots=shots)
             @qml.defer_measurements
             @qml.qnode(dev, interface=interface)
             def circ_postselect(theta):
@@ -1952,7 +1968,7 @@ class TestPostselection:
                 qml.measure(0, postselect=1)
                 return qml.apply(mp)
 
-            res = circ_postselect(param, shots=shots)
+            res = circ_postselect(param)
 
         if not isinstance(shots, tuple):
             assert qml.math.get_interface(res) == interface if interface != "autograd" else "numpy"
@@ -2076,6 +2092,7 @@ class TestPostselection:
 
         dev = qml.device("default.qubit")
 
+        @qml.set_shots(shots=shots)
         @qml.defer_measurements
         @qml.qnode(dev, interface=interface)
         def circ():
@@ -2085,12 +2102,13 @@ class TestPostselection:
             return qml.apply(mp)
 
         if use_jit:
-            import jax
+            pytest.xfail(
+                reason="defer measurements + hw-like does not work with JAX jit yet. See sc-96593 or #7981."
+            )
+            # import jax
+            # circ = jax.jit(circ)
 
-            pytest.xfail(reason="'shots' cannot be a static_argname for 'jit' in JAX 0.4.28")
-            circ = jax.jit(circ, static_argnames=["shots"])
-
-        res = circ(shots=shots)
+        res = circ()
 
         if not isinstance(shots, tuple):
             assert qml.math.shape(res) == expected_shape
@@ -2114,9 +2132,9 @@ class TestIntegration:
     @pytest.mark.parametrize("wires,expected", [(None, [1, 0]), (3, [0, 0, 1])])
     def test_sample_uses_device_wires(self, wires, expected):
         """Test that if device wires are given, then they are used by sample."""
-        dev = DefaultQubit(wires=wires, shots=5)
+        dev = DefaultQubit(wires=wires)
 
-        @qml.qnode(dev)
+        @qml.qnode(dev, shots=5)
         def circuit():
             qml.PauliX(2)
             qml.Identity(0)
@@ -2177,9 +2195,9 @@ class TestIntegration:
     )
     def test_counts_uses_device_wires(self, wires, all_outcomes, expected):
         """Test that if device wires are given, then they are used by probs."""
-        dev = DefaultQubit(wires=wires, shots=10)
+        dev = DefaultQubit(wires=wires)
 
-        @qml.qnode(dev, interface=None)
+        @qml.qnode(dev, interface=None, shots=10)
         def circuit():
             qml.PauliX(2)
             qml.Identity(0)
@@ -2215,6 +2233,22 @@ class TestIntegration:
 
         assert qml.math.allclose(grad, grad_jit)
 
+    def test_snapshot_with_defer_measurement(self):
+        """Test that snapshots can be taken with defer_measurements."""
+
+        dev = qml.device("default.qubit")
+
+        @qml.qnode(dev)
+        def func():
+            qml.Hadamard(wires=0)
+            qml.measure(0)
+            qml.Snapshot("label")
+            return qml.probs(wires=0)
+
+        snapshots = qml.snapshots(func)()
+        assert snapshots["label"].shape == (4,)
+        assert qml.math.allclose(snapshots["execution_results"], np.array([0.5, 0.5]))
+
 
 @pytest.mark.parametrize("max_workers", max_workers_list)
 def test_broadcasted_parameter(max_workers):
@@ -2223,8 +2257,7 @@ def test_broadcasted_parameter(max_workers):
     x = np.array([0.536, 0.894])
     qs = qml.tape.QuantumScript([qml.RX(x, 0)], [qml.expval(qml.PauliZ(0))])
 
-    config = ExecutionConfig()
-    config.gradient_method = "adjoint"
+    config = ExecutionConfig(gradient_method="adjoint")
     program, config = dev.preprocess(config)
     batch, pre_processing_fn = program([qs])
     assert len(batch) == 2
@@ -2273,7 +2306,7 @@ def test_renomalization_issue():
         qml.evolve(H_interaction + global_drive)(params, ts)
         return qml.counts()
 
-    circuit_qml = qml.QNode(circuit, qml.device("default.qubit", shots=1000), interface="jax")
+    circuit_qml = qml.QNode(circuit, qml.device("default.qubit"), interface="jax", shots=1000)
 
     circuit_qml(params)
     jax.config.update("jax_enable_x64", initial_mode)

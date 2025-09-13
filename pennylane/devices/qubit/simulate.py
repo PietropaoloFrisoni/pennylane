@@ -15,9 +15,10 @@
 import logging
 
 # pylint: disable=protected-access
+# TODO: Remove when PL supports pylint==3.3.6 (it is considered a useless-suppression) [sc-91362]
+# pylint: disable=unused-argument
 from collections import Counter
 from functools import partial, singledispatch
-from typing import Optional
 
 import numpy as np
 from numpy.random import default_rng
@@ -215,7 +216,6 @@ def get_final_state(circuit, debugger=None, **execution_kwargs):
     return state, is_state_batched
 
 
-# pylint: disable=too-many-arguments
 @debug_logger
 def measure_final_state(circuit, state, is_state_batched, **execution_kwargs) -> Result:
     """
@@ -282,7 +282,7 @@ def measure_final_state(circuit, state, is_state_batched, **execution_kwargs) ->
 def simulate(
     circuit: qml.tape.QuantumScript,
     debugger=None,
-    state_cache: Optional[dict] = None,
+    state_cache: dict | None = None,
     **execution_kwargs,
 ) -> Result:
     """Simulate a single quantum script.
@@ -322,6 +322,7 @@ def simulate(
     tensor([0.68117888, 0.        , 0.31882112, 0.        ], requires_grad=True))
 
     """
+    circuit = circuit.copy()
     prng_key = execution_kwargs.pop("prng_key", None)
     circuit = circuit.map_to_standard_wires()
 
@@ -538,7 +539,8 @@ def simulate_tree_mcm(
             else:
                 initial_state = branch_state(stack.states[depth], mcm_current[depth], mcms[depth])
             circtmp = circuits[depth].copy(shots=qml.measurements.shots.Shots(shots))
-            circtmp = prepend_state_prep(circtmp, initial_state, interface, circuit.wires)
+
+            circtmp = prepend_state_prep(circtmp, initial_state, interface, sorted(circuit.wires))
             state, is_state_batched = get_final_state(
                 circtmp,
                 debugger=debugger,
@@ -856,14 +858,12 @@ def combine_measurements(terminal_measurements, results, mcm_samples):
             comb_meas = measurement_with_no_shots(circ_meas)
         else:
             comb_meas = combine_measurements_core(circ_meas, results.pop(0))
-        if isinstance(circ_meas, SampleMP):
-            comb_meas = qml.math.squeeze(comb_meas)
         final_measurements.append(comb_meas)
     return final_measurements[0] if len(final_measurements) == 1 else tuple(final_measurements)
 
 
 @singledispatch
-def combine_measurements_core(original_measurement, measures):  # pylint: disable=unused-argument
+def combine_measurements_core(original_measurement, measures):
     """Returns the combined measurement value of a given type."""
     raise TypeError(
         f"Native mid-circuit measurement mode does not support {type(original_measurement).__name__}"
@@ -871,7 +871,7 @@ def combine_measurements_core(original_measurement, measures):  # pylint: disabl
 
 
 @combine_measurements_core.register
-def _(original_measurement: CountsMP, measures):  # pylint: disable=unused-argument
+def _(original_measurement: CountsMP, measures):
     """The counts are accumulated using a ``Counter`` object."""
     keys = list(measures.keys())
     new_counts = Counter()
@@ -883,7 +883,7 @@ def _(original_measurement: CountsMP, measures):  # pylint: disable=unused-argum
 
 
 @combine_measurements_core.register
-def _(original_measurement: ExpectationMP, measures):  # pylint: disable=unused-argument
+def _(original_measurement: ExpectationMP, measures):
     """The expectation value of two branches is a weighted sum of expectation values."""
     cum_value = 0
     total_counts = 0
@@ -896,7 +896,7 @@ def _(original_measurement: ExpectationMP, measures):  # pylint: disable=unused-
 
 
 @combine_measurements_core.register
-def _(original_measurement: ProbabilityMP, measures):  # pylint: disable=unused-argument
+def _(original_measurement: ProbabilityMP, measures):
     """The combined probability of two branches is a weighted sum of the probabilities. Note the implementation is the same as for ``ExpectationMP``."""
     cum_value = 0
     total_counts = 0
@@ -909,12 +909,12 @@ def _(original_measurement: ProbabilityMP, measures):  # pylint: disable=unused-
 
 
 @combine_measurements_core.register
-def _(original_measurement: SampleMP, measures):  # pylint: disable=unused-argument
+def _(original_measurement: SampleMP, measures):
     """The combined samples of two branches is obtained by concatenating the sample of each branch."""
     new_sample = tuple(
         qml.math.atleast_1d(m[1]) for m in measures.values() if m[0] and not m[1] is tuple()
     )
-    return qml.math.squeeze(qml.math.concatenate(new_sample))
+    return qml.math.concatenate(new_sample)
 
 
 @debug_logger

@@ -177,17 +177,26 @@ class TestValidation:
             m = qml.measure(0)
             cond_measure(m, partial(measure_y, wires=0), partial(measure_x, wires=1))()
 
-    @pytest.mark.jax
-    def test_program_capture_raises_error(self):
-        """Test that a clear error is raised when executing with program capture"""
-        try:
-            qml.capture.enable()
+    @pytest.mark.capture
+    def test_program_capture(self):
+        """Test that program capture works as expected with cond_measure"""
+        import jax
 
-            with pytest.raises(NotImplementedError, match="not compatible with program capture"):
-                m = qml.measure(0)
-                cond_measure(m, measure_x, measure_y)(0)
-        finally:
-            qml.capture.disable()
+        def func():
+            m = qml.measure(0)
+            cond_measure(m, measure_x, measure_y)(0)
+
+        plxpr = jax.make_jaxpr(func)()
+
+        cond_eq = plxpr.eqns[1]
+        assert "cond" in str(cond_eq)
+        cond_branches = cond_eq.params["jaxpr_branches"]
+        assert len(cond_branches) == 2
+        for branch, angle in zip(cond_branches, [0, 1.57]):
+            branch_str = str(branch)
+            assert "measure_in_basis" in branch_str
+            assert "plane=XY" in branch_str
+            assert str(angle) in branch_str
 
 
 class TestWorkflows:
@@ -197,8 +206,9 @@ class TestWorkflows:
         """Test that we can execute a QNode with a ParametricMidMeasureMP applied in a conditional,
         and produce an accurate result"""
 
-        dev = qml.device("default.qubit", shots=shots)
+        dev = qml.device("default.qubit")
 
+        @qml.set_shots(shots)
         @qml.qnode(dev, mcm_method=mcm_method)
         def circ():
             qml.RX(np.pi, 0)
@@ -225,8 +235,9 @@ class TestWorkflows:
         """Test a workflow that feeds measurement values from conditional measurements forward
         into subsequent measurements and operations applied in `cond_measure` and `cond`"""
 
-        dev = qml.device("default.qubit", shots=shots)
+        dev = qml.device("default.qubit")
 
+        @qml.set_shots(shots)
         @qml.qnode(dev, mcm_method=mcm_method)
         def circ(x_rot, y_rot):
             qml.RX(np.pi, 0)

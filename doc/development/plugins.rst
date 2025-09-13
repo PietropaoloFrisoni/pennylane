@@ -25,7 +25,7 @@ In order to define a custom device, you only need to override the :meth:`~.devic
 
 .. code-block:: python
 
-    from pennylane.devices import Device, DefaultExecutionConfig
+    from pennylane.devices import Device, ExecutionConfig
     from pennylane.tape import QuantumScript, QuantumScriptOrBatch
 
     class MyDevice(Device):
@@ -34,7 +34,7 @@ In order to define a custom device, you only need to override the :meth:`~.devic
         def execute(
             self,
             circuits: QuantumScriptOrBatch,
-            execution_config: "ExecutionConfig" = DefaultExecutionConfig
+            execution_config: ExecutionConfig | None = None
         ):
             # your implementation here.
 
@@ -48,7 +48,7 @@ For example:
         def execute(
             self,
             circuits: QuantumScriptOrBatch,
-            execution_config: "ExecutionConfig" = DefaultExecutionConfig
+            execution_config: ExecutionConfig | None = None
         )
             return 0.0 if isinstance(circuits, qml.tape.QuantumScript) else tuple(0.0 for c in circuits)
 
@@ -87,7 +87,21 @@ circuits.
 >>> tape1 = qml.tape.QuantumScript([], [qml.sample(wires=0)], shots=10)
 >>> dev = qml.device('default.qubit')
 >>> dev.execute((tape0, tape1))
-(array([0, 0, 0, 0, 0]), array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]))
+(array([[0],
+        [0],
+        [0],
+        [0],
+        [0]]),
+ array([[0],
+        [0],
+        [0],
+        [0],
+        [0],
+        [0],
+        [0],
+        [0],
+        [0],
+        [0]]))
 
 The :class:`~.measurements.Shots` class describes the shots. Users can optionally specify a shot vector, or
 different numbers of shots to use when calculating the final expectation value.
@@ -457,9 +471,27 @@ the top user level, we aim to allow dynamic configuration of the device.
 >>> config = qml.devices.ExecutionConfig(device_options={"rng": 42})
 >>> tape = qml.tape.QuantumTape([qml.Hadamard(0)], [qml.sample(wires=0)], shots=10)
 >>> dev.execute(tape, config)
-array([1, 0, 1, 1, 0, 1, 1, 1, 0, 0])
+array([[1],
+       [1],
+       [0],
+       [1],
+       [0],
+       [1],
+       [0],
+       [1],
+       [0],
+       [0]])
 >>> dev.execute(tape, config)
-array([1, 0, 1, 1, 0, 1, 1, 1, 0, 0])
+array([[0],
+       [1],
+       [0],
+       [0],
+       [0],
+       [1],
+       [1],
+       [0],
+       [0],
+       [0]])
 
 By pulling options from this dictionary instead of from device properties, we unlock two key
 pieces of functionality:
@@ -546,7 +578,7 @@ to handle a single circuit. See the documentation for each modifier for more det
     @single_tape_support
     class MyDevice(qml.devices.Device):
 
-        def execute(self, circuits, execution_config = qml.devices.DefaultExecutionConfig):
+        def execute(self, circuits, execution_config: ExecutionConfig | None = None):
             return tuple(0.0 for _ in circuits)
 
 >>> dev = MyDevice()
@@ -573,7 +605,7 @@ The device tracker stores and records information when tracking mode is turned o
 the number of executions, number of shots, number of batches, or remote simulator cost for users to interact with
 in a customizable way.
 
-Three aspects of the :class:`~.Tracker` class are relevant to plugin designers:
+Three aspects of the :class:`~pennylane.Tracker` class are relevant to plugin designers:
 
 * The boolean ``active`` attribute that denotes whether or not to update and record
 * ``update`` method which accepts keyword-value pairs and stores the information
@@ -589,7 +621,7 @@ to the device:
         ...
 
 
-``simulator_tracking`` is useful when the device can simulataneously measure non-commuting measurements or
+``simulator_tracking`` is useful when the device can simultaneously measure non-commuting measurements or
 handle parameter-broadcasting, as it both tracks simulations and the corresponding number of QPU-like
 circuits.
 
@@ -609,7 +641,7 @@ number of execute and derivative batches, and number of derivatives.
 
 While this is the recommended usage, the ``update`` and ``record`` methods can be called at any location
 within the device. While the above example tracks executions, shots, and batches, the 
-:meth:`~.Tracker.update` method can accept any combination of
+:meth:`~pennylane.devices.Tracker.update` method can accept any combination of
 keyword-value pairs.  For example, a device could also track cost and a job ID via:
 
 .. code-block:: python

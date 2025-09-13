@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Transforms for interacting with PyZX, framework for ZX calculus."""
-# pylint: disable=too-many-statements, too-many-branches, too-many-return-statements, too-many-arguments
+# pylint: disable=too-many-return-statements,too-many-arguments
 
 from collections import OrderedDict
 from fractions import Fraction
@@ -21,11 +21,60 @@ from functools import partial
 import numpy as np
 
 import pennylane as qml
+from pennylane.exceptions import QuantumFunctionError, TransformError
 from pennylane.operation import Operator
 from pennylane.tape import QuantumScript, QuantumScriptBatch
-from pennylane.transforms import TransformError, transform
+from pennylane.transforms import transform
 from pennylane.typing import PostprocessingFn
 from pennylane.wires import Wires
+
+from .helper import _needs_pyzx
+
+
+def _toffoli_clifford_t_decomp(wires):
+    """Return the explicit Clifford+T decomposition of the Toffoli gate,
+    replacing Adjoint(T) with PhaseShift(-π/4)."""
+
+    return [
+        qml.Hadamard(wires=wires[2]),
+        qml.CNOT(wires=[wires[1], wires[2]]),
+        qml.PhaseShift(-np.pi / 4, wires=wires[2]),
+        qml.CNOT(wires=[wires[0], wires[2]]),
+        qml.T(wires=wires[2]),
+        qml.CNOT(wires=[wires[1], wires[2]]),
+        qml.PhaseShift(-np.pi / 4, wires=wires[2]),
+        qml.CNOT(wires=[wires[0], wires[2]]),
+        qml.T(wires=wires[2]),
+        qml.T(wires=wires[1]),
+        qml.CNOT(wires=[wires[0], wires[1]]),
+        qml.Hadamard(wires=wires[2]),
+        qml.T(wires=wires[0]),
+        qml.PhaseShift(-np.pi / 4, wires=wires[1]),
+        qml.CNOT(wires=[wires[0], wires[1]]),
+    ]
+
+
+def _ccz_clifford_t_decomp(wires):
+    """Return the explicit Clifford+T decomposition of the CCZ gate,
+    replacing Adjoint(T) with PhaseShift(-π/4)."""
+
+    return [
+        qml.CNOT(wires=[wires[1], wires[2]]),
+        qml.PhaseShift(-np.pi / 4, wires=wires[2]),
+        qml.CNOT(wires=[wires[0], wires[2]]),
+        qml.T(wires=wires[2]),
+        qml.CNOT(wires=[wires[1], wires[2]]),
+        qml.PhaseShift(-np.pi / 4, wires=wires[2]),
+        qml.CNOT(wires=[wires[0], wires[2]]),
+        qml.T(wires=wires[2]),
+        qml.T(wires=wires[1]),
+        qml.CNOT(wires=[wires[0], wires[1]]),
+        qml.Hadamard(wires=wires[2]),
+        qml.T(wires=wires[0]),
+        qml.PhaseShift(-np.pi / 4, wires=wires[1]),
+        qml.CNOT(wires=[wires[0], wires[1]]),
+        qml.Hadamard(wires=wires[2]),
+    ]
 
 
 class VertexType:  # pylint: disable=too-few-public-methods
@@ -52,7 +101,8 @@ class EdgeType:  # pylint: disable=too-few-public-methods
     HADAMARD = 2
 
 
-def to_zx(tape, expand_measurements=False):  # pylint: disable=unused-argument
+@_needs_pyzx
+def to_zx(tape, expand_measurements=False):
     """This transform converts a PennyLane quantum tape to a ZX-Graph in the `PyZX framework <https://pyzx.readthedocs.io/en/latest/>`_.
     The graph can be optimized and transformed by well-known ZX-calculus reductions.
 
@@ -66,6 +116,9 @@ def to_zx(tape, expand_measurements=False):  # pylint: disable=unused-argument
 
         The transformed circuit as described in :func:`qml.transform <pennylane.transform>`. Executing this circuit
         will provide the ZX graph in the form of a PyZX graph.
+
+    Raises:
+        ModuleNotFoundError: if the required ``pyzx`` package is not installed.
 
     **Example**
 
@@ -250,8 +303,15 @@ def to_zx(tape, expand_measurements=False):  # pylint: disable=unused-argument
 
     .. note::
 
-        It is a PennyLane adapted and reworked `circuit_to_graph <https://github.com/Quantomatic/pyzx/blob/master/pyzx/circuit/graphparser.py>`_
-        function.
+        This function is a PennyLane adaptation to `circuit_to_graph <https://github.com/zxcalc/pyzx/blob/master/pyzx/circuit/graphparser.py#L89>`_.
+        It requires the `pyzx <https://pyzx.readthedocs.io/en/latest/>`_ external package to be installed.
+
+    .. note::
+
+        Prior to being added to the graph, Toffoli and CCZ gates are replaced by particular decompositions. These decompositions
+        are described in detail in: J. Welch, A. Bocharov, and K. Svore, “Efficient Approximation of Diagonal Unitaries over the Clifford+T Basis,”
+        Quantum information & computation, vol. 16, Dec. 2014, doi: 10.26421/QIC16.1-2-6.
+        This is necessary because Toffoli and CCZ gates are not directly supported in PyZX.
 
         Copyright (C) 2018 - Aleks Kissinger and John van de Wetering
     """
@@ -269,31 +329,29 @@ def _to_zx_transform(
     tape: QuantumScript, expand_measurements=False
 ) -> tuple[QuantumScriptBatch, PostprocessingFn]:
     """Private function to convert a PennyLane tape to a `PyZX graph <https://pyzx.readthedocs.io/en/latest/>`_ ."""
-    # Avoid to make PyZX a requirement for PennyLane.
-    try:
-        # pylint: disable=import-outside-toplevel
-        import pyzx
-        from pyzx.circuit.gates import TargetMapper
-        from pyzx.graph import Graph
-
-    except ImportError as Error:
-        raise ImportError(
-            "This feature requires PyZX. It can be installed with: pip install pyzx"
-        ) from Error
+    # pylint: disable=import-outside-toplevel
+    import pyzx
+    from pyzx.circuit.gates import TargetMapper
+    from pyzx.graph import Graph
 
     # Dictionary of gates (PennyLane to PyZX circuit)
     gate_types = {
-        "PauliX": pyzx.circuit.gates.NOT,
-        "PauliZ": pyzx.circuit.gates.Z,
+        "X": pyzx.circuit.gates.NOT,
+        "Y": pyzx.circuit.gates.Y,
+        "Z": pyzx.circuit.gates.Z,
         "S": pyzx.circuit.gates.S,
         "T": pyzx.circuit.gates.T,
         "Hadamard": pyzx.circuit.gates.HAD,
         "RX": pyzx.circuit.gates.XPhase,
+        "RY": pyzx.circuit.gates.YPhase,
         "RZ": pyzx.circuit.gates.ZPhase,
         "PhaseShift": pyzx.circuit.gates.ZPhase,
         "SWAP": pyzx.circuit.gates.SWAP,
         "CNOT": pyzx.circuit.gates.CNOT,
+        "CY": pyzx.circuit.gates.CY,
         "CZ": pyzx.circuit.gates.CZ,
+        "CRX": pyzx.circuit.gates.CRX,
+        "CRY": pyzx.circuit.gates.CRY,
         "CRZ": pyzx.circuit.gates.CRZ,
         "CH": pyzx.circuit.gates.CHAD,
         "CCZ": pyzx.circuit.gates.CCZ,
@@ -309,7 +367,7 @@ def _to_zx_transform(
         # Map the wires to consecutive wires
 
         consecutive_wires = Wires(range(len(res[0].wires)))
-        consecutive_wires_map = OrderedDict(zip(res[0].wires, consecutive_wires))
+        consecutive_wires_map = OrderedDict(zip(res[0].wires, consecutive_wires, strict=True))
         mapped_tapes, fn = qml.map_wires(input=res[0], wire_map=consecutive_wires_map)
         mapped_tape = fn(mapped_tapes)
 
@@ -330,17 +388,12 @@ def _to_zx_transform(
         )
 
         expanded_operations = []
-
-        # Define specific decompositions
         for op in mapped_tape.operations:
-            if op.name == "RY":
-                theta = op.data[0]
-                decomp = [
-                    qml.RX(np.pi / 2, wires=op.wires),
-                    qml.RZ(theta + np.pi, wires=op.wires),
-                    qml.RX(np.pi / 2, wires=op.wires),
-                    qml.RZ(3 * np.pi, wires=op.wires),
-                ]
+            if op.name == "Toffoli":
+                decomp = _toffoli_clifford_t_decomp(op.wires)
+                expanded_operations.extend(decomp)
+            elif op.name == "CCZ":
+                decomp = _ccz_clifford_t_decomp(op.wires)
                 expanded_operations.extend(decomp)
             else:
                 expanded_operations.append(op)
@@ -375,7 +428,7 @@ def _add_operations_to_graph(tape, graph, gate_types, q_mapper, c_mapper):
         # Check that the gate is compatible with PyZX
         name = op.name
         if name not in gate_types:
-            raise qml.QuantumFunctionError(
+            raise QuantumFunctionError(
                 "The expansion of the quantum tape failed, PyZX does not support", name
             )
 
@@ -403,7 +456,6 @@ def from_zx(graph, decompose_phases=True):
 
     .. code-block:: python
 
-        import pyzx
         dev = qml.device('default.qubit', wires=2)
 
         @qml.transforms.to_zx
@@ -489,14 +541,14 @@ def from_zx(graph, decompose_phases=True):
 
             # The graph is not diagram like.
             if len(neighbors) != 1:
-                raise qml.QuantumFunctionError(
+                raise QuantumFunctionError(
                     "Graph doesn't seem circuit like: multiple parents. Try to use the PyZX function `extract_circuit`."
                 )
 
             neighbor_0 = neighbors[0]
 
             if qubits[neighbor_0] != qubit_1:
-                raise qml.QuantumFunctionError(
+                raise QuantumFunctionError(
                     "Cross qubit connections, the graph is not circuit-like."
                 )
 
@@ -571,7 +623,7 @@ def _add_two_qubit_gates(graph, vertex, neighbor, type_1, type_2, qubit_1, qubit
     """Return the list of two qubit gates giveeen the vertex and its neighbor."""
     if type_1 == type_2:
         if graph.edge_type(graph.edge(vertex, neighbor)) != EdgeType.HADAMARD:
-            raise qml.QuantumFunctionError(
+            raise QuantumFunctionError(
                 "Two green or respectively two red nodes connected by a simple edge does not have a "
                 "circuit representation."
             )
@@ -586,7 +638,7 @@ def _add_two_qubit_gates(graph, vertex, neighbor, type_1, type_2, qubit_1, qubit
         return [op_1, op_2, op_3]
 
     if graph.edge_type(graph.edge(vertex, neighbor)) != EdgeType.SIMPLE:
-        raise qml.QuantumFunctionError(
+        raise QuantumFunctionError(
             "A green and red node connected by a Hadamard edge does not have a circuit representation."
         )
     # Type1 is always of type Z therefore the qubits are already ordered.

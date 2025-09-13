@@ -15,6 +15,8 @@
 Test base AlgorithmicError class and its associated methods.
 """
 
+from typing import Optional
+
 import numpy as np
 
 # pylint: disable=too-few-public-methods, unused-argument
@@ -35,7 +37,7 @@ class SimpleError(AlgorithmicError):
         return self.__class__(self.error + other.error)
 
     @staticmethod
-    def get_error(approx_op, other_op):
+    def get_error(approximate_op, exact_op):
         return 0.5  # get simple error is always 0.5
 
 
@@ -59,9 +61,10 @@ class TestAlgorithmicError:
 
             class ErrorNoCombine(AlgorithmicError):
                 @staticmethod
-                def get_error(approx_op, other_op):
+                def get_error(approximate_op, exact_op):
                     return 0.5  # get simple error is always 0.5
 
+            # pylint: disable=abstract-class-instantiated
             _ = ErrorNoCombine(1.23)
 
     @pytest.mark.parametrize("err1", [1.23, 0.45, -6])
@@ -151,6 +154,8 @@ class TestSpectralNormError:
         """Test that get_error fails if the operator matrix is not defined"""
 
         class MyOp(Operation):
+
+            @property
             def name(self):
                 return self.__class__.__name__
 
@@ -242,7 +247,7 @@ class TestSpecAndTracker:
     # TODO: remove this when support for below is present
     # little hack for stopping device-level decomposition for custom ops
     @staticmethod
-    def preprocess(execution_config=qml.devices.DefaultExecutionConfig):
+    def preprocess(execution_config: Optional[qml.devices.ExecutionConfig] = None):
         """A vanilla preprocesser"""
         return qml.transforms.core.TransformProgram(), execution_config
 

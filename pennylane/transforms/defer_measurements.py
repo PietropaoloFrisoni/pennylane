@@ -13,12 +13,13 @@
 # limitations under the License.
 """Code for the tape transform implementing the deferred measurement principle."""
 
+from collections.abc import Callable, Sequence
 from functools import lru_cache, partial
 from numbers import Number
-from typing import Callable, Optional, Sequence, Union
 from warnings import warn
 
 import pennylane as qml
+from pennylane.exceptions import TransformError
 from pennylane.measurements import (
     CountsMP,
     MeasurementValue,
@@ -30,7 +31,7 @@ from pennylane.measurements import (
 from pennylane.ops.op_math import ctrl
 from pennylane.queuing import QueuingManager
 from pennylane.tape import QuantumScript, QuantumScriptBatch
-from pennylane.transforms import TransformError, transform
+from pennylane.transforms import transform
 from pennylane.typing import PostprocessingFn
 from pennylane.wires import Wires
 
@@ -129,7 +130,7 @@ def _get_plxpr_defer_measurements():
     class DeferMeasurementsInterpreter(PlxprInterpreter):
         """Interpreter for applying the defer_measurements transform to plxpr."""
 
-        # pylint: disable=unnecessary-lambda-assignment,attribute-defined-outside-init,no-self-use
+        # pylint: disable=attribute-defined-outside-init,no-self-use
 
         def __init__(self, num_wires):
             super().__init__()
@@ -161,7 +162,7 @@ def _get_plxpr_defer_measurements():
                 cur_target (int): target wire to be used for a mid-circuit measurement
 
             Raises:
-                TransformError: if there is overlap between the used circuit wires and mid-circuit
+                TransformError: if there is an overlap between the used circuit wires and mid-circuit
                 measurement target wires
             """
             self.state["used_wires"] |= wires.toset()
@@ -184,7 +185,7 @@ def _get_plxpr_defer_measurements():
                 inds (Sequence[int]): Indices of mid-circuit measurement values in ``data``
 
             Raises:
-                TransformError: if there is overlap between the used circuit wires and mid-circuit
+                TransformError: if there is an overlap between the used circuit wires and mid-circuit
                 measurement target wires
             """
             if len(inds) > 1:
@@ -260,16 +261,16 @@ def _get_plxpr_defer_measurements():
 
         def resolve_mcm_values(
             self,
-            primitive: "jax.core.Primitive",
+            primitive: "jax.extend.core.Primitive",
             subfuns: Sequence[Callable],
-            invals: Sequence[Union[MeasurementValue, Number]],
+            invals: Sequence[MeasurementValue | Number],
             params: dict,
         ) -> MeasurementValue:
             """Create a ``MeasurementValue`` that captures all classical processing of the
             input ``eqn`` in its ``processing_fn``.
 
             Args:
-                primitive (jax.core.Primitive): Jax primitive
+                primitive (jax.extend.core.Primitive): Jax primitive
                 subfuns (Sequence[Callable]): Callable positional arguments to the primitive.
                     These are created by pre-processing jaxpr equation parameters.
                 invals (Sequence[Union[MeasurementValue, Number]]): Inputs to the primitive
@@ -306,11 +307,11 @@ def _get_plxpr_defer_measurements():
             [m0, other] = invals if isinstance(invals[0], MeasurementValue) else invals[::-1]
             return m0._apply(lambda x: processing_fn(x, other))
 
-        def eval(self, jaxpr: "jax.core.Jaxpr", consts: list, *args) -> list:
+        def eval(self, jaxpr: "jax.extend.core.Jaxpr", consts: list, *args) -> list:
             """Evaluate a jaxpr.
 
             Args:
-                jaxpr (jax.core.Jaxpr): the jaxpr to evaluate
+                jaxpr (jax.extend.core.Jaxpr): the jaxpr to evaluate
                 consts (list[TensorLike]): the constant variables for the jaxpr
                 *args (tuple[TensorLike]): The arguments for the jaxpr.
 
@@ -388,12 +389,10 @@ def _get_plxpr_defer_measurements():
                 qml.PauliX(wires=wires)
 
         self.state["cur_target"] -= 1
-        return MeasurementValue([meas], lambda x: x)
+        return MeasurementValue([meas])
 
     @DeferMeasurementsInterpreter.register_primitive(cond_prim)
-    def _(
-        self, *invals, jaxpr_branches, consts_slices, args_slice
-    ):  # pylint: disable=unused-argument
+    def _(self, *invals, jaxpr_branches, consts_slices, args_slice):
         n_branches = len(jaxpr_branches)
         conditions = invals[:n_branches]
         if not any(isinstance(c, MeasurementValue) for c in conditions):
@@ -409,11 +408,6 @@ def _get_plxpr_defer_measurements():
         args = invals[args_slice]
 
         for i, (condition, jaxpr) in enumerate(zip(conditions, jaxpr_branches, strict=True)):
-            if jaxpr is None:
-                # If a false branch isn't provided, the jaxpr corresponding to the condition
-                # for the false branch will be None. That is the only scenario where we would
-                # reach here.
-                continue
 
             if isinstance(condition, MeasurementValue):
                 control_wires = Wires([m.wires[0] for m in condition.measurements])
@@ -474,7 +468,7 @@ def defer_measurements(
     tape: QuantumScript,
     reduce_postselected: bool = True,
     allow_postselect: bool = True,
-    num_wires: Optional[int] = None,
+    num_wires: int | None = None,
 ) -> tuple[QuantumScriptBatch, PostprocessingFn]:
     """Quantum function transform that substitutes operations conditioned on
     measurement outcomes to controlled operations.
@@ -520,11 +514,6 @@ def defer_measurements(
         :func:`~.pennylane.counts` can only be used with ``defer_measurements`` if wires
         or an observable are explicitly specified.
 
-    .. warning::
-
-        ``defer_measurements`` does not support using custom wire labels if any measured
-        wires are reused or reset.
-
     Args:
         tape (QNode or QuantumTape or Callable): a quantum circuit.
         reduce_postselected (bool): Whether to use postselection information to reduce the number
@@ -541,7 +530,6 @@ def defer_measurements(
             transformed circuit as described in :func:`qml.transform <pennylane.transform>`.
 
     Raises:
-        ValueError: If custom wire labels are used with qubit reuse or reset
         ValueError: If any measurements with no wires or observable are present
         ValueError: If continuous variable operations or measurements are present
         ValueError: If using the transform with any device other than
@@ -656,7 +644,7 @@ def defer_measurements(
         .. warning::
 
             While the transform includes validation to avoid overlap between wires of the original
-            circuit and mid-circuit measurement target wires, if any wires of the original ciruit
+            circuit and mid-circuit measurement target wires, if any wires of the original circuit
             are traced, i.e. dependent on dynamic arguments to the transformed workflow, the
             validation may not catch overlaps. Consider the following example:
 
@@ -679,8 +667,8 @@ def defer_measurements(
             is unknown. However, execution with n = 0 would raise an error, as the CNOT wires would
             be (0, 0).
 
-            Thus, users must by cautious when transforming a circuit. **For ``n`` total wires and
-            ``c`` circuit wires, the number of mid-circuit measurements allowed is ``n - c``.**
+            Thus, users must be cautious when transforming a circuit. **For n total wires and
+            c circuit wires, the number of mid-circuit measurements allowed is n - c.**
 
         Using ``defer_measurements`` with program capture enabled introduces new features and
         restrictions:
@@ -694,9 +682,9 @@ def defer_measurements(
           measurements.
 
         * Using mid-circuit measurements as gate parameters is now possible. This feature currently
-          has the following restrictions:
-          * Mid-circuit measurement values cannot be used for multiple parameters of the same gate.
-          * Mid-circuit measurement values cannot be used as wires.
+          has the following restrictions. First, mid-circuit measurement values cannot be used
+          for multiple parameters of the same gate. Second, mid-circuit measurement values
+          cannot be used as wires.
 
           .. code-block:: python
 
@@ -777,16 +765,15 @@ def defer_measurements(
             "must support the Projector gate to apply postselection."
         )
 
-    if len(reused_measurement_wires) > 0 and not all(isinstance(w, int) for w in tape.wires):
-        raise ValueError(
-            "qml.defer_measurements does not support custom wire labels with qubit reuse/reset."
-        )
+    integer_wires = [w for w in tape.wires if isinstance(w, int)]
 
     # Apply controlled operations to store measurement outcomes and replace
     # classically controlled operations
     control_wires = {}
     cur_wire = (
-        max(tape.wires) + 1 if reused_measurement_wires or any_repeated_measurements else None
+        (max(integer_wires) + 1 if integer_wires else 0)
+        if reused_measurement_wires or any_repeated_measurements
+        else None
     )
 
     for op in tape.operations:
@@ -837,7 +824,9 @@ def defer_measurements(
                 new_ms = [
                     qml.map_wires(m, {m.wires[0]: control_wires[m.id]}) for m in mp.mv.measurements
                 ]
-                new_m = MeasurementValue(new_ms, mp.mv.processing_fn)
+                new_m = MeasurementValue(
+                    new_ms, mp.mv.processing_fn if mp.mv.has_processing else None
+                )
             else:
                 new_m = []
                 for val in mp.mv:
@@ -845,7 +834,9 @@ def defer_measurements(
                         qml.map_wires(m, {m.wires[0]: control_wires[m.id]})
                         for m in val.measurements
                     ]
-                    new_m.append(MeasurementValue(new_ms, val.processing_fn))
+                    new_m.append(
+                        MeasurementValue(new_ms, val.processing_fn if val.has_processing else None)
+                    )
 
             with QueuingManager.stop_recording():
                 new_mp = (

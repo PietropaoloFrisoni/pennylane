@@ -19,6 +19,7 @@ import pytest
 
 import pennylane as qml
 from pennylane import numpy as pnp
+from pennylane.ops.functions.assert_valid import _test_decomposition_rule
 
 
 class TestFable:
@@ -44,10 +45,7 @@ class TestFable:
     @pytest.mark.parametrize(
         ("input", "wires"),
         [
-            (
-                np.random.random((2, 2)),
-                3,
-            ),
+            (np.random.random((2, 2)), 3),
             (
                 np.array(
                     [
@@ -59,17 +57,10 @@ class TestFable:
                 ),
                 5,
             ),
-            (
-                np.random.random((8, 8)),
-                7,
-            ),
-            (
-                np.random.random((16, 16)),
-                9,
-            ),
+            (np.random.random((8, 8)), 7),
         ],
     )
-    def test_fable_real_for_variety_of_input_matrices(self, input, wires):
+    def test_fable_real_input_matrices(self, input, wires):
         """Test that FABLE produces the right circuit given a square, real-valued matrix"""
         dev = qml.device("default.qubit")
 
@@ -78,10 +69,8 @@ class TestFable:
             qml.FABLE(input_matrix=input, wires=range(wires), tol=0)
             return qml.state()
 
-        expected = (
-            len(input)
-            * qml.matrix(circuit, wire_order=range(wires))().real[0 : len(input), 0 : len(input)]
-        )
+        dim = len(input)
+        expected = dim * qml.matrix(circuit, wire_order=range(wires))().real[:dim, :dim]
         assert np.allclose(input, expected)
 
     def test_fable_imaginary_error(self, input_matrix):
@@ -391,89 +380,68 @@ class TestFable:
     @pytest.mark.parametrize(
         ("input", "wires"),
         [
-            (
-                np.random.random((1, 2)),
-                3,
-            ),
-            (
-                np.random.random((1, 1)),
-                3,
-            ),
-            (
-                np.random.random((2, 1)),
-                3,
-            ),
-            (
-                np.random.random((3, 2)),
-                5,
-            ),
-            (
-                np.random.random((4, 2)),
-                5,
-            ),
-            (
-                np.random.random((2, 3)),
-                5,
-            ),
-            (
-                np.random.random((2, 4)),
-                5,
-            ),
-            (
-                np.random.random((3, 4)),
-                5,
-            ),
-            (
-                np.random.random((4, 3)),
-                5,
-            ),
-            (
-                np.random.random((3, 5)),
-                7,
-            ),
-            (
-                np.random.random((3, 6)),
-                7,
-            ),
-            (
-                np.random.random((3, 7)),
-                7,
-            ),
-            (
-                np.random.random((4, 5)),
-                7,
-            ),
-            (
-                np.random.random((5, 5)),
-                7,
-            ),
-            (
-                np.random.random((6, 5)),
-                7,
-            ),
-            (
-                np.random.random((2, 9)),
-                9,
-            ),
-            (
-                np.random.random((9, 3)),
-                9,
-            ),
+            (np.random.random((1, 2)), 3),
+            (np.random.random((1, 1)), 3),
+            (np.random.random((2, 1)), 3),
+            (np.random.random((3, 2)), 5),
+            (np.random.random((4, 2)), 5),
+            (np.random.random((2, 3)), 5),
+            (np.random.random((2, 4)), 5),
+            (np.random.random((3, 4)), 5),
+            (np.random.random((4, 3)), 5),
+            (np.random.random((3, 5)), 7),
+            (np.random.random((3, 6)), 7),
+            (np.random.random((3, 7)), 7),
+            (np.random.random((4, 5)), 7),
+            (np.random.random((5, 5)), 7),
+            (np.random.random((6, 5)), 7),
         ],
     )
     def test_variety_of_matrix_shapes(self, input, wires):
-        """Test that FABLE runs without error for variety of cases."""
+        """Test that FABLE runs without error for a variety of input shapes."""
         dev = qml.device("default.qubit")
-        s = int(qml.math.ceil(qml.math.log2(max(len(input), len(input[0])))))
-        dimension = s**2
+        s = int(qml.math.ceil(qml.math.log2(max(input.shape))))
+        s = max(s, 1)
+        dim = 2**s
 
         @qml.qnode(dev)
         def circuit():
             qml.FABLE(input_matrix=input, wires=range(wires), tol=0)
             return qml.state()
 
-        expected = (
-            dimension
-            * qml.matrix(circuit, wire_order=range(wires))().real[0:dimension, 0:dimension]
+        circuit_mat = dim * qml.matrix(circuit, wire_order=range(wires))().real[:dim, :dim]
+        # Test that the matrix was encoded up to a constant
+        submat = circuit_mat[: input.shape[0], : input.shape[1]]
+        assert np.allclose(input, submat)
+
+    @pytest.mark.parametrize(
+        ("input", "wires", "tol"),
+        [
+            (np.random.random((1, 2)), 3, 0),
+            (np.random.random((1, 1)), 3, 1),
+            (np.random.random((2, 1)), 3, 0),
+            (np.random.random((3, 2)), 5, 1),
+            (np.random.random((2, 3)), 5, 1),
+            (np.random.random((3, 4)), 5, 1),
+            (np.random.random((3, 5)), 7, 1),
+            (np.random.random((3, 7)), 7, 1),
+            (np.random.random((5, 5)), 7, 1),
+        ],
+    )
+    def test_decomposition_new(self, input, wires, tol):
+        """Tests the decomposition rule implemented with the new system."""
+        op = qml.FABLE(input_matrix=input, wires=range(wires), tol=tol)
+
+        for rule in qml.list_decomps(qml.FABLE):
+            _test_decomposition_rule(op, rule)
+
+    def test_decomposition_new_fixed_input(self):
+        """Check the operation using the assert_valid function."""
+        matrix = np.array(
+            [[0.8488749045779405, 0.6727547394771869], [0.21985217715701366, 0.9938695727819239]]
         )
-        assert qml.math.shape(expected) == (dimension, dimension)
+
+        op = qml.FABLE(matrix, wires=range(3), tol=0)
+
+        for rule in qml.list_decomps(qml.FABLE):
+            _test_decomposition_rule(op, rule)

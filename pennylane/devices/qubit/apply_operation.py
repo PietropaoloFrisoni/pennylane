@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Functions to apply an operation to a state vector."""
-# pylint: disable=unused-argument, too-many-arguments
+# pylint: disable=unused-argument
 
 from functools import singledispatch
 from string import ascii_letters as alphabet
@@ -75,7 +75,9 @@ def apply_operation_einsum(op: qml.operation.Operator, state, is_state_batched: 
     # We use this implicit casting strategy as autograd raises ComplexWarnings
     # when backpropagating if casting explicitly. Some type of casting is needed
     # to prevent ComplexWarnings with backpropagation with other interfaces
-    if qml.math.get_interface(state) == "tensorflow":
+    if (
+        qml.math.get_interface(state) == "tensorflow"
+    ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
         mat = qml.math.cast_like(op.matrix(), state)
     else:
         mat = op.matrix() + 0j
@@ -124,7 +126,9 @@ def apply_operation_tensordot(op: qml.operation.Operator, state, is_state_batche
     # We use this implicit casting strategy as autograd raises ComplexWarnings
     # when backpropagating if casting explicitly. Some type of casting is needed
     # to prevent ComplexWarnings with backpropagation with other interfaces
-    if qml.math.get_interface(state) == "tensorflow":
+    if (
+        qml.math.get_interface(state) == "tensorflow"
+    ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
         mat = qml.math.cast_like(op.matrix(), state)
     else:
         mat = op.matrix() + 0j
@@ -426,7 +430,9 @@ def apply_pauliz(op: qml.Z, state, is_state_batched: bool = False, debugger=None
     axis = op.wires[0] + is_state_batched
     n_dim = math.ndim(state)
 
-    if n_dim >= 9 and math.get_interface(state) == "tensorflow":
+    if (
+        n_dim >= 9 and math.get_interface(state) == "tensorflow"
+    ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
         return apply_operation_tensordot(op, state, is_state_batched=is_state_batched)
 
     sl_0 = _get_slice(0, axis, n_dim)
@@ -443,7 +449,9 @@ def apply_phaseshift(op: qml.PhaseShift, state, is_state_batched: bool = False, 
 
     n_dim = math.ndim(state)
 
-    if n_dim >= 9 and math.get_interface(state) == "tensorflow":
+    if (
+        n_dim >= 9 and math.get_interface(state) == "tensorflow"
+    ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
         return apply_operation_tensordot(op, state, is_state_batched=is_state_batched)
 
     axis = op.wires[0] + is_state_batched
@@ -454,7 +462,7 @@ def apply_phaseshift(op: qml.PhaseShift, state, is_state_batched: bool = False, 
     params = math.cast(op.parameters[0], dtype=complex)
     state0 = state[sl_0]
     state1 = state[sl_1]
-    if op.batch_size is not None and len(params) > 1:
+    if op.batch_size is not None:
         interface = math.get_interface(state)
         if interface == "torch":
             params = math.array(params, like=interface)
@@ -467,8 +475,6 @@ def apply_phaseshift(op: qml.PhaseShift, state, is_state_batched: bool = False, 
             state1 = math.expand_dims(state1, 0)
     state1 = math.multiply(math.cast(state1, dtype=complex), math.exp(1.0j * params))
     state = math.stack([state0, state1], axis=axis)
-    if not is_state_batched and op.batch_size == 1:
-        state = math.stack([state], axis=0)
     return state
 
 
@@ -479,7 +485,9 @@ def apply_T(op: qml.T, state, is_state_batched: bool = False, debugger=None, **_
     axis = op.wires[0] + is_state_batched
     n_dim = math.ndim(state)
 
-    if n_dim >= 9 and math.get_interface(state) == "tensorflow":
+    if (
+        n_dim >= 9 and math.get_interface(state) == "tensorflow"
+    ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
         return apply_operation_tensordot(op, state, is_state_batched=is_state_batched)
 
     sl_0 = _get_slice(0, axis, n_dim)
@@ -496,7 +504,9 @@ def apply_S(op: qml.S, state, is_state_batched: bool = False, debugger=None, **_
     axis = op.wires[0] + is_state_batched
     n_dim = math.ndim(state)
 
-    if n_dim >= 9 and math.get_interface(state) == "tensorflow":
+    if (
+        n_dim >= 9 and math.get_interface(state) == "tensorflow"
+    ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
         return apply_operation_tensordot(op, state, is_state_batched=is_state_batched)
 
     sl_0 = _get_slice(0, axis, n_dim)
@@ -513,7 +523,9 @@ def apply_cnot(op: qml.CNOT, state, is_state_batched: bool = False, debugger=Non
     control_axes = op.wires[0] + is_state_batched
     n_dim = math.ndim(state)
 
-    if n_dim >= 9 and math.get_interface(state) == "tensorflow":
+    if (
+        n_dim >= 9 and math.get_interface(state) == "tensorflow"
+    ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
         return apply_operation_tensordot(op, state, is_state_batched=is_state_batched)
 
     sl_0 = _get_slice(0, control_axes, n_dim)
@@ -630,27 +642,30 @@ def apply_snapshot(
     op: qml.Snapshot, state, is_state_batched: bool = False, debugger=None, **execution_kwargs
 ):
     """Take a snapshot of the state."""
-    if debugger is not None and debugger.active:
-        measurement = op.hyperparameters["measurement"]
-
+    if debugger is None or not debugger.active:
+        return state
+    measurement = op.hyperparameters["measurement"]
+    if op.hyperparameters["shots"] == "workflow":
         shots = execution_kwargs.get("tape_shots")
+    else:
+        shots = op.hyperparameters["shots"]
 
-        if isinstance(measurement, qml.measurements.StateMP) or not shots:
-            snapshot = qml.devices.qubit.measure(measurement, state, is_state_batched)
-        else:
-            snapshot = qml.devices.qubit.measure_with_samples(
-                [measurement],
-                state,
-                shots,
-                is_state_batched,
-                execution_kwargs.get("rng"),
-                execution_kwargs.get("prng_key"),
-            )[0]
+    if shots:
+        snapshot = qml.devices.qubit.measure_with_samples(
+            [measurement],
+            state,
+            shots,
+            is_state_batched,
+            execution_kwargs.get("rng"),
+            execution_kwargs.get("prng_key"),
+        )[0]
+    else:
+        snapshot = qml.devices.qubit.measure(measurement, state, is_state_batched)
 
-        if op.tag:
-            debugger.snapshots[op.tag] = snapshot
-        else:
-            debugger.snapshots[len(debugger.snapshots)] = snapshot
+    if op.tag:
+        debugger.snapshots[op.tag] = snapshot
+    else:
+        debugger.snapshots[len(debugger.snapshots)] = snapshot
     return state
 
 
@@ -710,7 +725,7 @@ def _evolve_state_vector_under_parametrized_evolution(
     except ImportError as e:  # pragma: no cover
         raise ImportError(
             "Module jax is required for the ``ParametrizedEvolution`` class. "
-            "You can install jax via: pip install jax"
+            "You can install jax via: pip install jax~=0.6.0"
         ) from e
 
     if operation.data is None or operation.t is None:

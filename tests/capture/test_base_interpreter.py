@@ -32,7 +32,7 @@ from pennylane.capture.primitives import (  # pylint: disable=wrong-import-posit
     while_loop_prim,
 )
 
-pytestmark = [pytest.mark.jax, pytest.mark.usefixtures("enable_disable_plxpr")]
+pytestmark = [pytest.mark.jax, pytest.mark.capture]
 
 
 class SimplifyInterpreter(PlxprInterpreter):
@@ -243,7 +243,7 @@ def test_overriding_measurements():
             return qml.sample(wires=measurement.wires)
 
     @MeasurementsToSample()
-    @qml.qnode(qml.device("default.qubit", wires=2, shots=5))
+    @qml.qnode(qml.device("default.qubit", wires=2), shots=5)
     def circuit():
         return qml.expval(qml.Z(0)), qml.probs(wires=(0, 1))
 
@@ -333,7 +333,7 @@ class ConstAdder(PlxprInterpreter):
     that consts propagate through higher order primitives correctly."""
 
 
-add_3 = jax.core.Primitive("add_3")
+add_3 = jax.extend.core.Primitive("add_3")
 scalar = jnp.array(3)
 
 
@@ -350,7 +350,7 @@ def add_3_aval(_):
 @ConstAdder.register_primitive(add_3)
 def handle_add_3(self, x):  # pylint: disable=unused-argument
     """This custom registration adds a closure variable to the input to register it as
-    a const rather than a jax.core.Literal."""
+    a const rather than a jax.extend.core.Literal."""
     return x + scalar
 
 
@@ -501,7 +501,8 @@ class TestHigherOrderPrimitiveRegistrations:
 
         jaxpr = jax.make_jaxpr(f)(True)
 
-        assert jaxpr.eqns[0].params["jaxpr_branches"][-1] is None  # no false branch
+        false_branch = jaxpr.eqns[0].params["jaxpr_branches"][-1]
+        assert len(false_branch.eqns) == 0
 
         with qml.queuing.AnnotatedQueue() as q_true:
             jax.core.eval_jaxpr(jaxpr.jaxpr, jaxpr.consts, True)
@@ -796,6 +797,7 @@ class TestDynamicShapes:
         assert jax.numpy.allclose(output[0], 7)  # 4 + 1
         assert jax.numpy.allclose(output[1], 2 * jax.numpy.arange(7))
 
+    @pytest.mark.xfail  # v0.5.3 broke the ability to capture this
     def test_hstack(self):
         """Test that eval_jaxpr can handle the hstack primitive. hstack primitive produces a pjit equation,
         which currently does not work with dynamic shapes."""

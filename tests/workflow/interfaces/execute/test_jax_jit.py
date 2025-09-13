@@ -195,6 +195,7 @@ class TestCaching:
                 [tape],
                 dev,
                 diff_method=param_shift,
+                cache=True,
                 cachesize=cachesize,
             )[0]
 
@@ -802,7 +803,7 @@ class TestVectorValuedJIT:
 
     def test_qnode_sample(self, execute_kwargs):
         """Tests computing multiple expectation values in a tape."""
-        dev = qml.device("default.qubit", wires=2, shots=10)
+        dev = qml.device("default.qubit", wires=2)
         params = jax.numpy.array([0.1, 0.2, 0.3])
 
         grad_meth = execute_kwargs.get("diff_method", "")
@@ -817,14 +818,14 @@ class TestVectorValuedJIT:
                 qml.RY(a[2], wires=0)
                 qml.sample(qml.PauliZ(0))
 
-            tape = qml.tape.QuantumScript.from_queue(q, shots=dev.shots)
+            tape = qml.tape.QuantumScript.from_queue(q, shots=10)
 
             res = qml.execute([tape], dev, cache=cache, **execute_kwargs)[0]
             return res
 
         res = jax.jit(cost, static_argnums=1)(params, cache=None)
 
-        assert res.shape == (dev.shots.total_shots,)
+        assert res.shape == (10,)
 
     def test_multiple_expvals_grad(self, execute_kwargs):
         """Tests computing multiple expectation values in a tape."""
@@ -913,15 +914,12 @@ class TestJitAllCounts:
         for val in ["01", "10", "11"]:
             assert qml.math.allclose(res[val], 0)
 
-    @pytest.mark.parametrize(
-        "device_name",
-        (
-            pytest.param("default.qubit", marks=pytest.mark.xfail),
-            pytest.param("reference.qubit", marks=pytest.mark.xfail),
-        ),
-    )
+    @pytest.mark.parametrize("device_name", ("default.qubit", "reference.qubit"))
     def test_jit_allcounts_broadcasting(self, device_name):
         """Test jitting with counts with all_outcomes == True."""
+
+        if device_name == "default.qubit":
+            pytest.xfail(reason="counts on the executed tape is not compatible with JAX-JIT")
 
         tape = qml.tape.QuantumScript(
             [qml.RX(np.array([0.0, 0.0]), 0)],
@@ -946,7 +944,7 @@ class TestJitAllCounts:
 def test_diff_method_None_jit():
     """Test that jitted execution works when `diff_method=None`."""
 
-    dev = qml.device("default.qubit", wires=1, shots=10)
+    dev = qml.device("default.qubit", wires=1)
 
     @jax.jit
     def wrapper(x):
@@ -954,7 +952,7 @@ def test_diff_method_None_jit():
             qml.RX(x, wires=0)
             qml.expval(qml.PauliZ(0))
 
-        tape = qml.tape.QuantumScript.from_queue(q)
+        tape = qml.tape.QuantumScript.from_queue(q, shots=10)
 
         return qml.execute([tape], dev, diff_method=None)
 

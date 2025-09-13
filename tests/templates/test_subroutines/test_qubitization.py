@@ -21,6 +21,7 @@ import pytest
 
 import pennylane as qml
 from pennylane import numpy as np
+from pennylane.ops.functions.assert_valid import _test_decomposition_rule
 
 
 @pytest.mark.parametrize(
@@ -66,17 +67,21 @@ def test_operator_definition_qpe(hamiltonian):
 
 
 @pytest.mark.parametrize(
-    ("lcu", "control", "skip_diff"),
+    ("lcu", "control"),
     [
-        (qml.dot([0.1, -0.3], [qml.X(2), qml.Z(3)]), [0], False),
-        (qml.dot([0.1, -0.3, -0.3], [qml.X(0), qml.Z(1), qml.Y(0) @ qml.Z(2)]), [3, 4], True),
+        (qml.X(1) @ qml.Z(2), [0]),
+        (qml.X(0) @ qml.Z(1), [2]),
+        (qml.X(1) @ qml.Z(2) @ qml.Y(3), [0]),
+        (qml.X(0) @ qml.Z(1) @ qml.Y(2), [3]),
+        (qml.PauliX("a") @ qml.PauliZ(1), [0]),
+        (qml.PauliX("a") @ qml.PauliZ(1) @ qml.PauliY(2), [0]),
     ],
 )
-def test_standard_validity(lcu, control, skip_diff):
+def test_standard_validity(lcu, control):
     """Check the operation using the assert_valid function."""
     op = qml.Qubitization(lcu, control)
     # Skip differentiation for test cases that raise NaNs in gradients (known limitation of ``MottonenStatePreparation``).
-    qml.ops.functions.assert_valid(op, skip_differentiation=skip_diff)
+    qml.ops.functions.assert_valid(op)
 
 
 @pytest.mark.parametrize(
@@ -112,6 +117,24 @@ def test_decomposition(hamiltonian, expected_decomposition):
     decomposition = qml.Qubitization.compute_decomposition(hamiltonian=hamiltonian, control=[1])
     for i, op in enumerate(decomposition):
         qml.assert_equal(op, expected_decomposition[i])
+
+
+@pytest.mark.parametrize(
+    "hamiltonian, control",
+    [
+        (qml.X(1) @ qml.Z(2), [0]),
+        (qml.X(0) @ qml.Z(1), [2]),
+        (qml.X(1) @ qml.Z(2) @ qml.Y(3), [0]),
+        (qml.X(0) @ qml.Z(1) @ qml.Y(2), [3]),
+        (qml.PauliX("a") @ qml.PauliZ(1), [0]),
+        (qml.PauliX("a") @ qml.PauliZ(1) @ qml.PauliY(2), [0]),
+    ],
+)
+def test_decomposition_new(hamiltonian, control):  # pylint: disable=unused-argument
+    """Tests the decomposition rule implemented with the new system."""
+    op = qml.Qubitization(hamiltonian, control=control)
+    for rule in qml.list_decomps(qml.Qubitization):
+        _test_decomposition_rule(op, rule)
 
 
 def test_lightning_qubit():
@@ -170,10 +193,12 @@ class TestDifferentiability:
 
         jax.config.update("jax_enable_x64", True)
 
-        dev = qml.device("default.qubit", shots=shots, seed=seed)
+        dev = qml.device("default.qubit", seed=seed)
 
         diff_method = "backprop" if shots is None else "parameter-shift"
-        qnode = qml.QNode(self.circuit, dev, interface="jax", diff_method=diff_method)
+        qnode = qml.set_shots(
+            qml.QNode(self.circuit, dev, interface="jax", diff_method=diff_method), shots=shots
+        )
         if use_jit:
             qnode = jax.jit(qnode)
 
@@ -185,7 +210,9 @@ class TestDifferentiability:
 
         jac = jac_fn(params)
         assert jac.shape == (4,)
-        assert np.allclose(jac, self.exp_grad, atol=0.05)
+
+        atol = 1e-5 if shots is None else 0.05
+        assert np.allclose(jac, self.exp_grad, atol=atol)
 
     @pytest.mark.torch
     @pytest.mark.parametrize("shots", [None, 50000])
@@ -194,14 +221,17 @@ class TestDifferentiability:
         argument controls whether autodiff or parameter-shift gradients are used."""
         import torch
 
-        dev = qml.device("default.qubit", shots=shots, seed=seed)
+        dev = qml.device("default.qubit", seed=seed)
         diff_method = "backprop" if shots is None else "parameter-shift"
-        qnode = qml.QNode(self.circuit, dev, interface="torch", diff_method=diff_method)
+        qnode = qml.set_shots(
+            qml.QNode(self.circuit, dev, interface="torch", diff_method=diff_method), shots=shots
+        )
 
         params = torch.tensor(self.params, requires_grad=True)
         jac = torch.autograd.functional.jacobian(qnode, params)
         assert qml.math.shape(jac) == (4,)
-        assert qml.math.allclose(jac, self.exp_grad, atol=0.01)
+        atol = 1e-5 if shots is None else 0.05
+        assert qml.math.allclose(jac, self.exp_grad, atol=atol)
 
     @pytest.mark.tf
     @pytest.mark.parametrize("shots", [None, 50000])
@@ -211,9 +241,11 @@ class TestDifferentiability:
         argument controls whether autodiff or parameter-shift gradients are used."""
         import tensorflow as tf
 
-        dev = qml.device("default.qubit", shots=shots, seed=seed)
+        dev = qml.device("default.qubit", seed=seed)
         diff_method = "backprop" if shots is None else "parameter-shift"
-        qnode = qml.QNode(self.circuit, dev, interface="tf", diff_method=diff_method)
+        qnode = qml.set_shots(
+            qml.QNode(self.circuit, dev, interface="tf", diff_method=diff_method), shots=shots
+        )
 
         params = tf.Variable(self.params)
         with tf.GradientTape() as tape:

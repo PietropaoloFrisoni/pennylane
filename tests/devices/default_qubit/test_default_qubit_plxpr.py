@@ -17,9 +17,10 @@ import pytest
 
 import pennylane as qml
 from pennylane.devices import ExecutionConfig, MCMConfig
+from pennylane.exceptions import DeviceError
 
 jax = pytest.importorskip("jax")
-pytestmark = [pytest.mark.jax, pytest.mark.usefixtures("enable_disable_plxpr")]
+pytestmark = [pytest.mark.jax, pytest.mark.capture]
 
 
 class TestPreprocess:
@@ -30,7 +31,7 @@ class TestPreprocess:
         dev = qml.device("default.qubit", wires=1)
         config = ExecutionConfig(device_options={"foo": "bar"})
 
-        with pytest.raises(qml.DeviceError, match="device option foo not present"):
+        with pytest.raises(DeviceError, match="device option foo not present"):
             _ = dev.preprocess(execution_config=config)
 
     def test_execution_config_max_workers(self):
@@ -38,7 +39,7 @@ class TestPreprocess:
         dev = qml.device("default.qubit", wires=1)
         config = ExecutionConfig(device_options={"max_workers": "1"})
 
-        with pytest.raises(qml.DeviceError, match="Cannot set 'max_workers'"):
+        with pytest.raises(DeviceError, match="Cannot set 'max_workers'"):
             _ = dev.preprocess(execution_config=config)
 
     def test_execution_config_best_gradient_method(self):
@@ -58,14 +59,6 @@ class TestPreprocess:
         assert new_config.gradient_method == "adjoint"
         assert new_config.use_device_jacobian_product
         assert new_config.grad_on_execution
-
-    def test_execution_config_invalid_mcm_method_error(self):
-        """Test that an error is raised if mcm_method is invalid."""
-        dev = qml.device("default.qubit", wires=1)
-        config = ExecutionConfig(mcm_config=MCMConfig(mcm_method="foo"))
-
-        with pytest.raises(qml.DeviceError, match="mcm_method='foo' is not supported"):
-            _ = dev.preprocess(execution_config=config)
 
     def test_execution_config_default_mcm_config(self):
         """Test that not specifying MCM config updates the execution config correctly."""
@@ -129,19 +122,20 @@ class TestExecution:
         jaxpr = jax.make_jaxpr(lambda x: x + 1)(0.1)
         dev = qml.device("default.qubit")
 
-        with pytest.raises(qml.DeviceError, match="Device wires are required."):
+        with pytest.raises(DeviceError, match="Device wires are required."):
             dev.eval_jaxpr(jaxpr.jaxpr, jaxpr.consts, 0.2)
 
     def test_no_partitioned_shots(self):
         """Test that an error is raised if the device has partitioned shots."""
 
         jaxpr = jax.make_jaxpr(lambda x: x + 1)(0.1)
-        dev = qml.device("default.qubit", wires=1, shots=(100, 100))
+        dev = qml.device("default.qubit", wires=1)
 
         with pytest.raises(
-            qml.DeviceError, match="Shot vectors are unsupported with jaxpr execution."
+            DeviceError,
+            match="Shot vectors are unsupported with jaxpr execution.",
         ):
-            dev.eval_jaxpr(jaxpr.jaxpr, jaxpr.consts, 0.2)
+            dev.eval_jaxpr(jaxpr.jaxpr, jaxpr.consts, 0.2, shots=(100, 100))
 
     def test_use_device_prng(self):
         """Test that sampling depends on the device prng."""
@@ -149,8 +143,8 @@ class TestExecution:
         key1 = jax.random.PRNGKey(1234)
         key2 = jax.random.PRNGKey(1234)
 
-        dev1 = qml.device("default.qubit", wires=1, shots=100, seed=key1)
-        dev2 = qml.device("default.qubit", wires=1, shots=100, seed=key2)
+        dev1 = qml.device("default.qubit", wires=1, seed=key1)
+        dev2 = qml.device("default.qubit", wires=1, seed=key2)
 
         def f():
             qml.H(0)
@@ -158,21 +152,21 @@ class TestExecution:
 
         jaxpr = jax.make_jaxpr(f)()
 
-        samples1 = dev1.eval_jaxpr(jaxpr.jaxpr, jaxpr.consts)
-        samples2 = dev2.eval_jaxpr(jaxpr.jaxpr, jaxpr.consts)
+        samples1 = dev1.eval_jaxpr(jaxpr.jaxpr, jaxpr.consts, shots=100)
+        samples2 = dev2.eval_jaxpr(jaxpr.jaxpr, jaxpr.consts, shots=100)
 
         assert qml.math.allclose(samples1, samples2)
 
     def test_no_prng_key(self):
         """Test that that sampling works without a provided prng key."""
 
-        dev = qml.device("default.qubit", wires=1, shots=100)
+        dev = qml.device("default.qubit", wires=1)
 
         def f():
             return qml.sample(wires=0)
 
         jaxpr = jax.make_jaxpr(f)()
-        res = dev.eval_jaxpr(jaxpr.jaxpr, jaxpr.consts)
+        res = dev.eval_jaxpr(jaxpr.jaxpr, jaxpr.consts, shots=100)
         assert qml.math.allclose(res, jax.numpy.zeros(100))
 
     def test_simple_execution(self):

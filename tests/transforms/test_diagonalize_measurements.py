@@ -219,7 +219,7 @@ class TestDiagonalizeObservable:
         """Test that an unknown observable is left undiagonalized"""
 
         # pylint: disable=too-few-public-methods
-        class MyObs(qml.operation.Observable):
+        class MyObs(qml.operation.Operator):
 
             @property
             def name(self):
@@ -559,8 +559,9 @@ class TestDiagonalizeTapeMeasurements:
         if to_eigvals and supported_base_obs != [qml.Z]:
             pytest.skip("to_eigvals is not supported when not diagonalizing all gates")
 
-        dev = qml.device("default.qubit", shots=shots, seed=seed)
+        dev = qml.device("default.qubit", seed=seed)
 
+        @qml.set_shots(shots)
         @qml.qnode(dev)
         def circuit():
             qml.RX(1.23, 1)
@@ -568,6 +569,7 @@ class TestDiagonalizeTapeMeasurements:
             return qml.expval(X(0)), qml.var(X(1) + Y(2))
 
         @partial(diagonalize_measurements, supported_base_obs=supported_base_obs)
+        @qml.set_shots(shots)
         @qml.qnode(dev)
         def circuit_diagonalized():
             qml.RX(1.23, 1)

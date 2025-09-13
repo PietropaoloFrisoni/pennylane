@@ -18,12 +18,14 @@ Developer note: when making changes to this file, you can run
 `pennylane/doc/_static/tape_mpl/tape_mpl_examples.py` to generate docstring
 images.  If you change the docstring examples, please update this file.
 """
-# pylint: disable=no-member
-from collections import namedtuple
-from functools import singledispatch
-from typing import Optional, Sequence
 
-import pennylane as qml
+from __future__ import annotations
+
+from collections import namedtuple
+from collections.abc import Sequence
+from functools import singledispatch
+from typing import TYPE_CHECKING
+
 from pennylane import ops
 from pennylane.measurements import MidMeasureMP
 
@@ -38,12 +40,18 @@ from .utils import (
     unwrap_controls,
 )
 
+# TODO: Remove when PL supports pylint==3.3.6 (it is considered a useless-suppression) [sc-91362]
+# pylint: disable=ungrouped-imports
+if TYPE_CHECKING:
+    from pennylane.operation import Operator
+    from pennylane.tape import QuantumScript
+
+
 has_mpl = True
 try:
     import matplotlib as mpl
 except (ModuleNotFoundError, ImportError):  # pragma: no cover
     has_mpl = False
-
 
 _Config = namedtuple(
     "_Config", ("decimals", "active_wire_notches", "bit_map", "cwire_layers", "cwire_wires")
@@ -51,9 +59,7 @@ _Config = namedtuple(
 
 
 @singledispatch
-def _add_operation_to_drawer(
-    op: qml.operation.Operator, drawer: MPLDrawer, layer: int, config: _Config
-) -> None:
+def _add_operation_to_drawer(op: Operator, drawer: MPLDrawer, layer: int, config: _Config) -> None:
     """Adds the ``op`` to an ``MPLDrawer`` at the designated location.
 
     Args:
@@ -66,13 +72,15 @@ def _add_operation_to_drawer(
         Adds a depiction of ``op`` to ``drawer``
 
     """
-    op_control_wires, control_values = unwrap_controls(op)
-
-    target_wires = (
-        [w for w in op.wires if w not in op_control_wires]
-        if len(op.wires) != 0
-        else list(range(drawer.n_wires))
-    )
+    op_control_wires, control_values, base = unwrap_controls(op)
+    is_global_op = isinstance(base, (ops.GlobalPhase, ops.Identity))
+    if len(op.wires) == 0 or is_global_op:
+        op_wires = list(range(drawer.n_wires))
+    else:
+        op_wires = op.wires
+    target_wires = [w for w in op_wires if w not in op_control_wires]
+    if is_global_op and len(target_wires) == 0:
+        raise ValueError("Can't draw controlled global gate with unknown non-control wires.")
 
     if control_values is None:
         control_values = [True for _ in op_control_wires]
@@ -166,7 +174,7 @@ def _(op: MidMeasureMP, drawer, layer, _):
 
 
 @_add_operation_to_drawer.register
-def _(op: qml.ops.op_math.Conditional, drawer, layer, config) -> None:
+def _(op: ops.Conditional, drawer, layer, config) -> None:
     drawer.box_gate(
         layer,
         list(op.wires),
@@ -282,15 +290,17 @@ def _tape_mpl(tape, wire_order=None, show_all_wires=False, max_length=None, **kw
         When max_length is None: tuple(Figure, Axes) for the complete circuit
         Otherwise: list[tuple(Figure, Axes)] with one pair per circuit segment
     """
-    wire_map = convert_wire_order(tape, wire_order=wire_order, show_all_wires=show_all_wires)
+    full_wire_map, used_wire_map = convert_wire_order(
+        tape, wire_order=wire_order, show_all_wires=show_all_wires
+    )
     tape = transform_deferred_measurements_tape(tape)
-    tape = qml.map_wires(tape, wire_map=wire_map)[0][0]
+    tape = ops.functions.map_wires(tape, wire_map=full_wire_map)[0][0]
     bit_map = default_bit_map(tape)
 
     layers = drawable_layers(tape.operations, wire_map={i: i for i in tape.wires}, bit_map=bit_map)
 
     for i, layer in enumerate(layers):
-        if any(isinstance(o, qml.measurements.MidMeasureMP) and o.reset for o in layer):
+        if any(isinstance(o, MidMeasureMP) and o.reset for o in layer):
             layers.insert(i + 1, [])
 
     bit_map, cwire_layers, cwire_wires = cwire_connections(layers + [tape.measurements], bit_map)
@@ -304,7 +314,9 @@ def _tape_mpl(tape, wire_order=None, show_all_wires=False, max_length=None, **kw
     )
 
     if max_length is None:
-        return _draw_layers(layers, tape.measurements, config=config, wire_map=wire_map, **kwargs)
+        return _draw_layers(
+            layers, tape.measurements, config=config, wire_map=used_wire_map, **kwargs
+        )
 
     layer_count = len(layers)
     return [
@@ -312,7 +324,7 @@ def _tape_mpl(tape, wire_order=None, show_all_wires=False, max_length=None, **kw
             layers=layers[i : i + max_length],
             measurements=tape.measurements if i + max_length >= layer_count else "dots",
             config=config,
-            wire_map=wire_map,
+            wire_map=used_wire_map,
             starting_dots=i > 0,
             **kwargs,
         )
@@ -322,17 +334,17 @@ def _tape_mpl(tape, wire_order=None, show_all_wires=False, max_length=None, **kw
 
 # pylint: disable=too-many-arguments
 def tape_mpl(
-    tape: qml.tape.QuantumScript,
-    wire_order: Optional[Sequence] = None,
+    tape: QuantumScript,
+    wire_order: Sequence | None = None,
     show_all_wires: bool = False,
-    decimals: Optional[int] = None,
-    style: Optional[str] = None,
+    decimals: int | None = None,
+    style: str | None = None,
     *,
-    fig: Optional["mpl.figure.Figure"] = None,
-    max_length: Optional[int] = None,
+    fig: mpl.figure.Figure | None = None,
+    max_length: int | None = None,
     **kwargs,
 ):
-    """Produces a matplotlib graphic from a tape.
+    """Produces matplotlib graphic objects (``fig`` and ``ax``) from a tape.
 
     Args:
         tape (QuantumTape): the operations and measurements to draw

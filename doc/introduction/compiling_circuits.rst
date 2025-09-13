@@ -13,7 +13,7 @@ example, such a transformation could
 replace a gate type with another, fuse gates, exploit mathematical relations that simplify an observable,
 or replace a large circuit by a number of smaller circuits.
 
-Compilation functionality is mostly designed as **transforms**; see the
+Compilation functionality is mostly designed as **transforms**; see
 the :doc:`transforms documentation <../code/qml_transforms>` for more details,
 as well as information on how to write your own custom transforms.
 
@@ -104,8 +104,8 @@ As mentioned earlier we can also simplify QNode objects to, for example, group r
 Compilation transforms for circuit optimization
 -----------------------------------------------
 
-PennyLane includes multiple transforms that take quantum functions and return new
-quantum functions of optimized circuits:
+PennyLane includes multiple transforms that can act on ``QNode``'s, quantum functions, and multiple
+other PennyLane objects.
 
 :html:`<div class="summary-table">`
 
@@ -122,6 +122,7 @@ quantum functions of optimized circuits:
     ~pennylane.transforms.single_qubit_fusion
     ~pennylane.transforms.undo_swaps
     ~pennylane.transforms.decompose
+    ~pennylane.transforms.combine_global_phases
 
 :html:`</div>`
 
@@ -221,7 +222,7 @@ by their name, type, or by a set of rules they must follow.
 
 .. note::
 
-    Using :func:`~.pennylane.decompositions.enable_graph` enables PennyLane's new 
+    Using :func:`~.pennylane.decomposition.enable_graph` enables PennyLane's new 
     **experimental** decomposition algorithm (by default, this new system is *not* 
     enabled). This new system uses a graph-based approach, which provides better 
     overall versatility and resource efficiency.
@@ -238,7 +239,7 @@ a pre-defined set of gates:
     from functools import partial
 
     dev = qml.device('default.qubit')
-    allowed_gates = {qml.Toffoli, qml.RX, qml.RZ}
+    allowed_gates = {qml.Toffoli, qml.RX, qml.RZ, qml.GlobalPhase}
 
     @partial(decompose, gate_set=allowed_gates)
     @qml.qnode(dev)
@@ -251,9 +252,9 @@ With the Hadamard gate not in our gate set, it will be decomposed into allowed r
 gate operators.
 
 >>> print(qml.draw(circuit)())
-0: ──RZ(1.57)──RX(1.57)──RZ(1.57)─╭●─┤  <Z>
-1: ───────────────────────────────├●─┤     
-2: ───────────────────────────────╰X─┤ 
+0: ──RZ(1.57)─╭GlobalPhase(-0.79)──RX(1.57)──RZ(1.57)─╭GlobalPhase(-0.79)─╭●─┤  <Z>
+1: ───────────├GlobalPhase(-0.79)─────────────────────├GlobalPhase(-0.79)─├●─┤     
+2: ───────────╰GlobalPhase(-0.79)─────────────────────╰GlobalPhase(-0.79)─╰X─┤     
 
 Using a gate rule
 *****************
@@ -264,7 +265,7 @@ or two-qubit gates using a rule:
 .. code-block:: python
 
     # functions in gate_set can only be used with graph decomposition system disabled
-    qml.decompositions.disable_graph()
+    qml.decomposition.disable_graph()
 
     @partial(decompose, gate_set=lambda op: len(op.wires) <= 2) 
     @qml.qnode(dev)
@@ -318,20 +319,25 @@ From here, we can iterate through the stages of decomposition:
 1: ──H─╰●──────│───────│───────╭QFT†─┤  
 2: ──H─────────╰●──────│───────├QFT†─┤  
 3: ──H─────────────────╰●──────╰QFT†─┤  
+M0 = 
+[[0.87758256+0.j         0.        -0.47942554j]
+ [0.        -0.47942554j 0.87758256+0.j        ]]
 
 >>> print(qml.draw(decompose(circuit, max_expansion=2))())
-0: ──H──RZ(11.00)──RY(1.14)─╭X──RY(-1.14)──RZ(-9.42)─╭X──RZ(-1.57)──RZ(1.57)──RY(1.00)─╭X──RY(-1.00)
-1: ──H──────────────────────╰●───────────────────────╰●────────────────────────────────│────────────
-2: ──H─────────────────────────────────────────────────────────────────────────────────╰●───────────
-3: ──H──────────────────────────────────────────────────────────────────────────────────────────────
-───RZ(-6.28)─╭X──RZ(4.71)──RZ(1.57)──RY(0.50)─╭X──RY(-0.50)──RZ(-6.28)─╭X──RZ(4.71)─────────────────
-─────────────│────────────────────────────────│────────────────────────│──╭SWAP†────────────────────
-─────────────╰●───────────────────────────────│────────────────────────│──│─────────────╭(Rϕ(1.57))†
-──────────────────────────────────────────────╰●───────────────────────╰●─╰SWAP†─────H†─╰●──────────
-────────────────────────────────────┤  
-──────╭(Rϕ(0.79))†─╭(Rϕ(1.57))†──H†─┤  
-───H†─│────────────╰●───────────────┤  
-──────╰●────────────────────────────┤  
+0: ──H──RZ(4.71)──RY(1.14)─╭X──RY(-1.14)──RZ(-3.14)─╭X──RZ(-1.57)──RZ(1.57)──RY(1.00)─╭X ···
+1: ──H─────────────────────╰●───────────────────────╰●────────────────────────────────│─ ···
+2: ──H────────────────────────────────────────────────────────────────────────────────╰● ···
+3: ──H────────────────────────────────────────────────────────────────────────────────── ···
+<BLANKLINE>
+0: ··· ──RY(-1.00)──RZ(-6.28)─╭X──RZ(4.71)──RZ(1.57)──RY(0.50)─╭X──RY(-0.50)──RZ(-6.28)─╭X ···
+1: ··· ───────────────────────│────────────────────────────────│────────────────────────│─ ···
+2: ··· ───────────────────────╰●───────────────────────────────│────────────────────────│─ ···
+3: ··· ────────────────────────────────────────────────────────╰●───────────────────────╰● ···
+<BLANKLINE>
+0: ··· ──RZ(4.71)────────────────────────────────────────────────────┤  
+1: ··· ─╭SWAP†─────────────────────────╭(Rϕ(0.79))†─╭(Rϕ(1.57))†──H†─┤  
+2: ··· ─│─────────────╭(Rϕ(1.57))†──H†─│────────────╰(Rϕ(1.57))†─────┤  
+3: ··· ─╰SWAP†─────H†─╰(Rϕ(1.57))†─────╰(Rϕ(0.79))†──────────────────┤  
 
 Custom Operator Decomposition
 -----------------------------
@@ -443,7 +449,7 @@ custom decompositions via two keyword arguments:
   be chosen by the new algorithm, regardless of how resource efficient it may or 
   may not be.
 * ``alt_decomps``: any decompositions for an operator type list here are added as 
-  a *possible* decomposition rules the algorithm can choose based on its resource 
+  *possible* decomposition rules the algorithm can choose based on its resource 
   efficiency.
 
 Both keyword arguments above require a dictionary mapping PennyLane operator types to 
@@ -455,6 +461,8 @@ Consider this example where we add a fixed decomposition to ``CNOT`` gates:
 
 .. code-block:: python
 
+    qml.decomposition.enable_graph()
+
     @qml.register_resources({qml.H: 2, qml.CZ: 1})
     def my_cnot(wires, **__):
         qml.H(wires=wires[1])
@@ -462,12 +470,16 @@ Consider this example where we add a fixed decomposition to ``CNOT`` gates:
         qml.H(wires=wires[1])
 
 The :func:`~.pennylane.register_resources` accepts a dictionary mapping operator 
-types within the custom decomposition to the number oftimes they occur in the decomposition. 
+types within the custom decomposition to the number of times they occur in the decomposition. 
 With the resources registered, this can be used with ``fixed_decomps`` or ``alt_decomps``:
 
 .. code-block:: python
 
-    @partial(qml.transforms.decompose, fixed_decomps={qml.CNOT: my_cnot})
+    @partial(
+        qml.transforms.decompose, 
+        fixed_decomps={qml.CNOT: my_cnot},
+        gate_set={qml.H, qml.S, qml.T, qml.CZ},
+    )
     @qml.qnode(qml.device("default.qubit"))
     def circuit():
         qml.CNOT(wires=[0, 1])
@@ -498,7 +510,8 @@ type:
 
     @partial(
         qml.transforms.decompose,
-        alt_decomps={qml.CNOT: [my_cnot1, my_cnot2]}
+        gate_set={qml.CZ, qml.H, qml.Z, qml.RY},
+        alt_decomps={qml.CNOT: [my_cnot1, my_cnot2]},
     )
     @qml.qnode(qml.device("default.qubit"))
     def circuit():

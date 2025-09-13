@@ -19,7 +19,7 @@ quantum channels supported by PennyLane, as well as their conventions.
 import numpy as np
 
 from pennylane import math
-from pennylane.operation import AnyWires, Channel
+from pennylane.operation import Channel
 
 QUDIT_DIM = 3
 
@@ -195,7 +195,9 @@ class QutritDepolarizingChannel(Channel):
         one = 1
         z = 0
 
-        if interface == "tensorflow":
+        if (
+            interface == "tensorflow"
+        ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
             p = math.cast_like(p, 1j)
             w = math.cast_like(w, p)
             one = math.cast_like(one, p)
@@ -478,7 +480,6 @@ class QutritChannel(Channel):
         id (str or None): String representing the operation (optional)
     """
 
-    num_wires = AnyWires
     grad_method = None
 
     def __init__(self, K_list, wires=None, id=None):

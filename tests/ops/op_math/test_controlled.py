@@ -37,7 +37,8 @@ from scipy import sparse
 
 import pennylane as qml
 from pennylane import numpy as pnp
-from pennylane.operation import DecompositionUndefinedError, Operation, Operator
+from pennylane.exceptions import DecompositionUndefinedError, PennyLaneDeprecationWarning
+from pennylane.operation import Operation, Operator
 from pennylane.ops.op_math.controlled import Controlled, ControlledOp, ctrl
 from pennylane.tape import QuantumScript
 from pennylane.tape.tape import expand_tape
@@ -143,7 +144,7 @@ class TestControlledInit:
         assert op.control_values == [True, False]
         assert op.hyperparameters["control_values"] == [True, False]
 
-        assert op.work_wires == Wires(("aux"))
+        assert op.work_wires == Wires("aux")
 
         assert op.name == "C(TempOperator)"
         assert op.id == "something"
@@ -200,6 +201,13 @@ class TestControlledInit:
         with pytest.raises(ValueError, match="Work wires must be different."):
             Controlled(self.temp_op, control_wires="b", work_wires="b")
 
+    @pytest.mark.parametrize("old_name, new_name", [("clean", "zeroed"), ("dirty", "borrowed")])
+    def test_old_work_wire_type_deprecated(self, old_name, new_name):
+        """Tests that specifying work_wire_type as 'clean' or 'dirty' is deprecated"""
+        with pytest.warns(PennyLaneDeprecationWarning, match="work_wire_type"):
+            op = Controlled(self.temp_op, "b", work_wires="c", work_wire_type=old_name)
+        assert op.work_wire_type == new_name
+
 
 class TestControlledProperties:
     """Test the properties of the ``Controlled`` symbolic operator."""
@@ -219,6 +227,7 @@ class TestControlledProperties:
             "num_control_wires": 2,
             "num_zero_control_values": 1,
             "num_work_wires": 1,
+            "work_wire_type": "borrowed",
         }
 
     def test_data(self):
@@ -379,7 +388,7 @@ class TestControlledProperties:
 
         assert op.base.wires == Wires(("c", "d"))
         assert op.control_wires == Wires(("a", "b"))
-        assert op.work_wires == Wires(("extra"))
+        assert op.work_wires == Wires("extra")
 
 
 class TestControlledMiscMethods:
@@ -412,7 +421,7 @@ class TestControlledMiscMethods:
         assert data[0] is target
         assert len(data) == 1
 
-        assert metadata == (control_wires, control_values, work_wires)
+        assert metadata == (control_wires, control_values, work_wires, "borrowed")
 
         # make sure metadata is hashable
         assert hash(metadata)
@@ -1456,7 +1465,7 @@ class TestControlledSupportsBroadcasting:
         cls = getattr(qml, name)
 
         # Provide up to 6 wires and take as many as the class requires
-        # This assumes that the class does *not* have `num_wires=qml.operation.AnyWires`
+        # This assumes that the class does *not* have `num_wires=None`
         wires = ["wire0", 5, 41, "aux_wire", -1, 9][: cls.num_wires]
         base = cls(par, wires=wires)
         op = Controlled(base, "wire1")
@@ -1777,14 +1786,18 @@ class TestCtrl:
     def test_nested_controls(self):
         """Tests that nested controls are flattened correctly."""
 
-        op = qml.ctrl(
-            Controlled(
-                Controlled(qml.S(wires=[0]), control_wires=[1]),
-                control_wires=[2],
-                control_values=[0],
-            ),
-            control=[3],
-        )
+        with qml.queuing.AnnotatedQueue() as q:
+            op = qml.ctrl(
+                Controlled(
+                    Controlled(qml.S(wires=[0]), control_wires=[1]),
+                    control_wires=[2],
+                    control_values=[0],
+                ),
+                control=[3],
+            )
+
+        assert len(q) == 1
+        assert q.queue[0] is op
         expected = Controlled(
             qml.S(wires=[0]),
             control_wires=[3, 2, 1],

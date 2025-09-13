@@ -16,8 +16,24 @@ This module contains functions to load circuits from other frameworks as
 PennyLane templates.
 """
 from collections import defaultdict
+from collections.abc import Callable
+from functools import wraps
 from importlib import metadata
 from sys import version_info
+from typing import Any, overload
+
+from pennylane.tape import QuantumScript
+from pennylane.transforms import convert_to_numpy_parameters
+from pennylane.wires import Wires, WiresLike
+from pennylane.workflow import QNode, construct_tape
+
+has_openqasm = True
+try:
+    import openqasm3
+
+    from pennylane.io.qasm_interpreter import QasmInterpreter  # pylint: disable=ungrouped-imports
+except (ModuleNotFoundError, ImportError) as import_error:  # pragma: no cover
+    has_openqasm = False  # pragma: no cover
 
 # Error message to show when the PennyLane-Qiskit plugin is required but missing.
 _MISSING_QISKIT_PLUGIN_MESSAGE = (
@@ -32,9 +48,118 @@ _MISSING_QISKIT_PLUGIN_MESSAGE = (
 __plugin_devices = (
     defaultdict(tuple, metadata.entry_points())["pennylane.io"]
     if version_info[:2] == (3, 9)
-    else metadata.entry_points(group="pennylane.io")  # pylint:disable=unexpected-keyword-arg
+    else metadata.entry_points(group="pennylane.io")
 )
 plugin_converters = {entry.name: entry for entry in __plugin_devices}
+
+
+OPENQASM_GATES = {
+    "CNOT": "cx",
+    "CZ": "cz",
+    "U3": "u3",
+    "U2": "u2",
+    "U1": "u1",
+    "Identity": "id",
+    "PauliX": "x",
+    "PauliY": "y",
+    "PauliZ": "z",
+    "Hadamard": "h",
+    "S": "s",
+    "Adjoint(S)": "sdg",
+    "T": "t",
+    "Adjoint(T)": "tdg",
+    "RX": "rx",
+    "RY": "ry",
+    "RZ": "rz",
+    "CRX": "crx",
+    "CRY": "cry",
+    "CRZ": "crz",
+    "SWAP": "swap",
+    "Toffoli": "ccx",
+    "CSWAP": "cswap",
+    "PhaseShift": "u1",
+}
+"""
+dict[str, str]: Maps PennyLane gate names to equivalent QASM gate names.
+
+Note that QASM has two native gates:
+
+- ``U`` (equivalent to :class:`~.U3`)
+- ``CX`` (equivalent to :class:`~.CNOT`)
+
+All other gates are defined in the file stdgates.inc:
+https://github.com/Qiskit/openqasm/blob/master/examples/stdgates.inc
+"""
+
+
+def _tape_openqasm(tape, wires, rotations, measure_all, precision):
+    """Helper function to serialize a tape as an OpenQASM 2.0 program."""
+    wires = wires or tape.wires
+
+    # add the QASM headers
+    qasm_str = 'OPENQASM 2.0;\ninclude "qelib1.inc";\n'
+
+    if tape.num_wires == 0:
+        # empty circuit
+        return qasm_str
+
+    # create the quantum and classical registers
+    qasm_str += f"qreg q[{len(wires)}];\n"
+    qasm_str += f"creg c[{len(wires)}];\n"
+
+    # get the user applied circuit operations without interface information
+    [transformed_tape], _ = convert_to_numpy_parameters(tape)
+    operations = transformed_tape.operations
+
+    if rotations:
+        # if requested, append diagonalizing gates corresponding
+        # to circuit observables
+        operations += tape.diagonalizing_gates
+
+    # decompose the queue
+
+    just_ops = QuantumScript(operations)
+    operations = just_ops.expand(
+        depth=10, stop_at=lambda obj: obj.name in OPENQASM_GATES
+    ).operations
+
+    # create the QASM code representing the operations
+    for op in operations:
+        try:
+            gate = OPENQASM_GATES[op.name]
+        except KeyError as e:
+            raise ValueError(f"Operation {op.name} not supported by the QASM serializer") from e
+
+        wire_labels = ",".join([f"q[{wires.index(w)}]" for w in op.wires.tolist()])
+        params = ""
+
+        if op.num_params > 0:
+            # If the operation takes parameters, construct a string
+            # with parameter values.
+            if precision is not None:
+                params = "(" + ",".join([f"{p:.{precision}}" for p in op.parameters]) + ")"
+            else:
+                # use default precision
+                params = "(" + ",".join([str(p) for p in op.parameters]) + ")"
+
+        qasm_str += f"{gate}{params} {wire_labels};\n"
+
+    # apply computational basis measurements to each quantum register
+    # NOTE: This is not strictly necessary, we could inspect self.observables,
+    # and then only measure wires which are requested by the user. However,
+    # some devices which consume QASM require all registers be measured, so
+    # measure all wires by default to be safe.
+    if measure_all:
+        for wire in range(len(wires)):
+            qasm_str += f"measure q[{wire}] -> c[{wire}];\n"
+    else:
+        measured_wires = Wires.all_wires([m.wires for m in tape.measurements])
+
+        for w in measured_wires:
+            wire_indx = tape.wires.index(w)
+            qasm_str += f"measure q[{wire_indx}] -> c[{wire_indx}];\n"
+
+    return qasm_str
 
 
 def from_qiskit(quantum_circuit, measurements=None):
@@ -613,6 +738,151 @@ def from_qasm(quantum_circuit: str, measurements=None):
     return plugin_converter(quantum_circuit, measurements=measurements)
 
 
+@overload
+def to_openqasm(
+    circuit: QuantumScript,
+    wires: WiresLike | None = None,
+    rotations: bool = True,
+    measure_all: bool = True,
+    precision: int | None = None,
+) -> str: ...
+@overload
+def to_openqasm(
+    circuit: QNode,
+    wires: WiresLike | None = None,
+    rotations: bool = True,
+    measure_all: bool = True,
+    precision: int | None = None,
+) -> Callable[[Any], str]: ...
+def to_openqasm(
+    circuit,
+    wires=None,
+    rotations=True,
+    measure_all=True,
+    precision=None,
+):
+    """Convert a circuit to an OpenQASM 2.0 program.
+
+    Terminal measurements are assumed to be performed on all qubits in the computational basis.
+    An optional ``rotations`` argument can be provided so that the output of the OpenQASM circuit
+    is diagonal in the eigenbasis of the quantum circuit's observables.
+    The measurement outputs can be restricted to only those specified in the circuit by setting ``measure_all=False``.
+
+    Args:
+        circuit (QNode or QuantumScript): the quantum circuit to be serialized.
+        wires (Wires or None): the wires to use when serializing the circuit.
+            Default is ``None``, such that all the wires of the circuit are used for serialization.
+        rotations (bool): if ``True``, add gates that diagonalize the measured wires to the eigenbasis
+            of the circuit's observables. Default is ``True``.
+        measure_all (bool): if ``True``, add a computational basis measurement on all the qubits.
+            Default is ``True``.
+        precision (int or None): number of decimal digits to display for the parameters.
+
+    Returns:
+        str: OpenQASM 2.0 program corresponding to the circuit.
+
+    **Example**
+
+    The following QNode can be serialized to an OpenQASM 2.0 program:
+
+    .. code-block:: python
+
+        dev = qml.device("default.qubit", wires=2)
+
+        @qml.qnode(dev)
+        def circuit(theta, phi):
+            qml.RX(theta, wires=0)
+            qml.CNOT(wires=[0,1])
+            qml.RZ(phi, wires=1)
+            return qml.sample()
+
+    >>> print(qml.to_openqasm(circuit)(1.2, 0.9))
+    OPENQASM 2.0;
+    include "qelib1.inc";
+    qreg q[2];
+    creg c[2];
+    rx(1.2) q[0];
+    cx q[0],q[1];
+    rz(0.9) q[1];
+    measure q[0] -> c[0];
+    measure q[1] -> c[1];
+
+    .. details::
+        :title: Usage Details
+
+        By default, the resulting OpenQASM code will have terminal measurements on all qubits, where all the measurements are performed in the computational basis.
+        However, if terminal measurements in the circuit act only on a subset of the qubits and ``measure_all=False``,
+        the OpenQASM code will include measurements on those specific qubits only.
+
+        .. code-block:: python
+
+            dev = qml.device("default.qubit", wires=2)
+
+            @qml.qnode(dev)
+            def circuit():
+                qml.Hadamard(0)
+                qml.CNOT(wires=[0,1])
+                return qml.sample(wires=1)
+
+        >>> print(qml.to_openqasm(circuit, measure_all=False)())
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[2];
+        creg c[2];
+        h q[0];
+        cx q[0],q[1];
+        measure q[1] -> c[1];
+
+        If the circuit returns an expectation value of a given observable and ``rotations=True``, the OpenQASM 2.0 program will also
+        include the gates that diagonalize the measured wires such that they are in the eigenbasis of the measured observable.
+
+        .. code-block:: python
+
+            dev = qml.device("default.qubit", wires=2)
+
+            @qml.qnode(dev)
+            def circuit():
+                qml.Hadamard(0)
+                qml.CNOT(wires=[0,1])
+                return qml.expval(qml.PauliX(0) @ qml.PauliY(1))
+
+        >>> print(qml.to_openqasm(circuit, rotations=True)())
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[2];
+        creg c[2];
+        h q[0];
+        cx q[0],q[1];
+        h q[0];
+        z q[1];
+        s q[1];
+        h q[1];
+        measure q[0] -> c[0];
+        measure q[1] -> c[1];
+    """
+    if isinstance(circuit, QuantumScript):
+        return _tape_openqasm(
+            circuit,
+            wires=wires,
+            rotations=rotations,
+            measure_all=measure_all,
+            precision=precision,
+        )
+
+    @wraps(circuit)
+    def wrapper(*args, **kwargs) -> str:
+        tape = construct_tape(circuit)(*args, **kwargs)
+        return _tape_openqasm(
+            tape,
+            wires=wires,
+            rotations=rotations,
+            measure_all=measure_all,
+            precision=precision,
+        )
+
+    return wrapper
+
+
 def from_pyquil(pyquil_program):
     """Loads pyQuil Program objects by using the converter in the
     PennyLane-Rigetti plugin.
@@ -702,3 +972,109 @@ def from_quil_file(quil_filename: str):
     """
     plugin_converter = plugin_converters["quil_file"].load()
     return plugin_converter(quil_filename)
+
+
+def from_qasm3(quantum_circuit: str, wire_map: dict = None):
+    """
+    Converts an OpenQASM 3.0 circuit into a quantum function that can be used within a QNode.
+
+    .. note::
+        The standard library gates, qubit registers, built-in mathematical functions and constants, subroutines,
+        variables, control flow, measurements, inputs, outputs, custom gates and ``end`` statements are all supported.
+        Pulses are not yet supported.
+
+        In order to use this function, ``openqasm3`` and ``'openqasm3[parser]'`` must be installed in the user's
+        environment. Please consult the `OpenQASM installation instructions <https://pypi.org/project/openqasm3>`__
+        for directions.
+
+    Args:
+        quantum_circuit (str): a QASM 3.0 string containing a simple quantum circuit.
+        qubit_mapping Optional[dict]:  the mapping from OpenQASM 3.0 qubit names to PennyLane wires.
+
+    Returns:
+        function: A quantum function that will execute the program.
+
+
+    **Examples**
+
+    .. code-block:: python
+
+        qasm_string = '''
+                qubit q0;
+                qubit q1;
+                qubit q2;
+
+                float theta = 0.2;
+                int power = 2;
+
+                ry(theta / 2) q0;
+                rx(theta) q1;
+                pow(power) @ x q0;
+
+                def random(qubit q) -> bit
+                {
+                    bit b = "0";
+                    h q;
+                    measure q -> b;
+                    return b;
+                }
+
+                bit m = random(q2);
+
+                if (m) {
+                    int i = 0;
+                    while (i < 5) {
+                        i = i + 1;
+                        rz(i) q1;
+                        break;
+                    }
+                }
+        '''
+
+    .. code-block:: python
+
+        import pennylane as qml
+
+        dev = qml.device("default.qubit", wires=[0, 1, 2])
+        @qml.qnode(dev)
+        def my_circuit():
+            qml.from_qasm3(
+                qasm_string,
+                {'q0': 0, 'q1': 1, 'q2': 2}
+            )()
+            return qml.expval(qml.Z(0))
+
+    >>> print(qml.draw(my_circuit)())
+    0: ──RY(0.10)──X²────────────┤  <Z>
+    1: ──RX(0.20)───────RZ(1.00)─┤
+    2: ──H─────────┤↗├──║────────┤
+                    ╚═══╝
+    """
+    if not has_openqasm:  # pragma: no cover
+        raise ImportWarning(
+            "from_qasm3 requires openqasm3 and 'openqasm3[parser]' to be installed in your environment. "
+            "Please consult the OpenQASM 3.0 installation instructions for more information:"
+            " https://pypi.org/project/openqasm3/."
+        )  # pragma: no cover
+    # parse the QASM program
+    try:
+        ast = openqasm3.parser.parse(quantum_circuit, permissive=True)
+    except AttributeError as e:  # pragma: no cover
+        raise ImportError(
+            "antlr4-python3-runtime is required to interpret openqasm3 in addition to the openqasm3 package"
+        ) from e  # pragma: no cover
+    except Exception as e:
+        raise SyntaxError(
+            f"Something went wrong when parsing the provided OpenQASM 3.0 code. "
+            f"Please ensure the code is valid OpenQASM 3.0 syntax. {str(e)}",
+        ) from e
+
+    def interpret_function(**kwargs):
+        context = QasmInterpreter().interpret(
+            ast, context={"name": "global", "wire_map": wire_map}, **kwargs
+        )
+        if context["return"]:
+            return tuple(map(lambda v: v.val, context["return"].values()))
+        return context
+
+    return interpret_function

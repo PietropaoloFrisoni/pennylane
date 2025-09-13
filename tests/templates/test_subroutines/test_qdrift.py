@@ -21,6 +21,7 @@ import pytest
 
 import pennylane as qml
 from pennylane import numpy as qnp
+from pennylane.exceptions import QuantumFunctionError
 from pennylane.math import allclose, isclose
 from pennylane.templates.subroutines.qdrift import _sample_decomposition
 
@@ -30,8 +31,11 @@ test_hamiltonians = (
         [qml.PauliX(0), qml.PauliY(0), qml.PauliZ(1)],
     ),
     (
-        [1.23, -0.45j],
-        [qml.s_prod(0.1, qml.PauliX(0)), qml.prod(qml.PauliX(0), qml.PauliZ(1))],
+        [1.23, -0.45],
+        [
+            qml.s_prod(0.1, qml.PauliX(0)),
+            qml.prod(qml.PauliZ(0), qml.PauliX(1)),
+        ],  #  Here we chose such hamiltonian to have non-commutability
     ),  # op arith
     (
         [1, -0.5, 0.5],
@@ -184,7 +188,7 @@ class TestIntegration:
         """Test that the circuit executes as expected"""
         hamiltonian = qml.dot(coeffs, ops)
         wires = hamiltonian.wires
-        dev = qml.device("default.qubit", wires=wires)
+        dev = qml.device("reference.qubit", wires=wires)
 
         @qml.qnode(dev)
         def circ():
@@ -199,7 +203,7 @@ class TestIntegration:
         expected_state = (
             reduce(
                 lambda x, y: x @ y,
-                [qml.matrix(op, wire_order=wires) for op in expected_decomp],
+                [qml.matrix(op, wire_order=wires) for op in expected_decomp[::-1]],
             )
             @ initial_state
         )
@@ -215,7 +219,7 @@ class TestIntegration:
         time = qnp.array(0.5)
         coeffs = qnp.array(coeffs, requires_grad=False)
 
-        dev = qml.device("default.qubit", wires=[0, 1])
+        dev = qml.device("reference.qubit", wires=[0, 1])
 
         @qml.qnode(dev)
         def circ(time):
@@ -230,7 +234,7 @@ class TestIntegration:
         expected_state = (
             reduce(
                 lambda x, y: x @ y,
-                [qml.matrix(op, wire_order=[0, 1]) for op in expected_decomp],
+                [qml.matrix(op, wire_order=[0, 1]) for op in expected_decomp[::-1]],
             )
             @ initial_state
         )
@@ -260,7 +264,7 @@ class TestIntegration:
         expected_state = (
             reduce(
                 lambda x, y: x @ y,
-                [qml.matrix(op, wire_order=[0, 1]) for op in expected_decomp],
+                [qml.matrix(op, wire_order=[0, 1]) for op in expected_decomp[::-1]],
             )
             @ initial_state
         )
@@ -290,7 +294,7 @@ class TestIntegration:
         expected_state = tf.linalg.matvec(
             reduce(
                 lambda x, y: x @ y,
-                [qml.matrix(op, wire_order=[0, 1]) for op in expected_decomp],
+                [qml.matrix(op, wire_order=[0, 1]) for op in expected_decomp[::-1]],
             ),
             initial_state,
         )
@@ -305,7 +309,7 @@ class TestIntegration:
         from jax import numpy as jnp
 
         time = jnp.array(0.5)
-        dev = qml.device("default.qubit", wires=[0, 1])
+        dev = qml.device("reference.qubit", wires=[0, 1])
 
         @qml.qnode(dev)
         def circ(time):
@@ -320,7 +324,7 @@ class TestIntegration:
         expected_state = (
             reduce(
                 lambda x, y: x @ y,
-                [qml.matrix(op, wire_order=[0, 1]) for op in expected_decomp],
+                [qml.matrix(op, wire_order=[0, 1]) for op in expected_decomp[::-1]],
             )
             @ initial_state
         )
@@ -336,7 +340,7 @@ class TestIntegration:
         from jax import numpy as jnp
 
         time = jnp.array(0.5)
-        dev = qml.device("default.qubit", wires=[0, 1])
+        dev = qml.device("reference.qubit", wires=[0, 1])
 
         @jax.jit
         @qml.qnode(dev, interface="jax")
@@ -352,7 +356,7 @@ class TestIntegration:
         expected_state = (
             reduce(
                 lambda x, y: x @ y,
-                [qml.matrix(op, wire_order=[0, 1]) for op in expected_decomp],
+                [qml.matrix(op, wire_order=[0, 1]) for op in expected_decomp[::-1]],
             )
             @ initial_state
         )
@@ -376,7 +380,7 @@ class TestIntegration:
             return qml.expval(qml.Hadamard(0))
 
         msg = "The QDrift template currently doesn't support differentiation through the coefficients of the input Hamiltonian."
-        with pytest.raises(qml.QuantumFunctionError, match=msg):
+        with pytest.raises(QuantumFunctionError, match=msg):
             qml.grad(circ)(time, coeffs)
 
     @pytest.mark.torch
@@ -397,7 +401,7 @@ class TestIntegration:
             return qml.expval(qml.Hadamard(0))
 
         msg = "The QDrift template currently doesn't support differentiation through the coefficients of the input Hamiltonian."
-        with pytest.raises(qml.QuantumFunctionError, match=msg):
+        with pytest.raises(QuantumFunctionError, match=msg):
             res_circ = circ(time, coeffs)
             res_circ.backward()
 
@@ -422,7 +426,7 @@ class TestIntegration:
             return qml.expval(qml.Hadamard(0))
 
         msg = "The QDrift template currently doesn't support differentiation through the coefficients of the input Hamiltonian."
-        with pytest.raises(qml.QuantumFunctionError, match=msg):
+        with pytest.raises(QuantumFunctionError, match=msg):
             with tf.GradientTape() as tape:
                 result = circ(time, coeffs)
             tape.gradient(result, coeffs)
@@ -437,7 +441,7 @@ class TestIntegration:
         coeffs = jnp.array([1.23, -0.45])
 
         terms = [qml.PauliX(0), qml.PauliZ(0)]
-        dev = qml.device("default.qubit", wires=1)
+        dev = qml.device("reference.qubit", wires=1)
 
         @qml.qnode(dev)
         def circ(time, coeffs):
@@ -446,7 +450,7 @@ class TestIntegration:
             return qml.expval(qml.Hadamard(0))
 
         msg = "The QDrift template currently doesn't support differentiation through the coefficients of the input Hamiltonian."
-        with pytest.raises(qml.QuantumFunctionError, match=msg):
+        with pytest.raises(QuantumFunctionError, match=msg):
             jax.grad(circ, argnums=[1])(time, coeffs)
 
     @pytest.mark.autograd

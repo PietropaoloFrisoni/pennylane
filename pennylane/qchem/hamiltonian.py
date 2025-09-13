@@ -23,7 +23,7 @@ from .hartree_fock import nuclear_energy, scf
 from .molecule import Molecule
 from .observable_hf import fermionic_observable, qubit_observable
 
-# pylint: disable= too-many-branches, too-many-arguments, too-many-locals, too-many-nested-blocks
+# pylint: disable=too-many-branches,too-many-arguments,too-many-locals
 # pylint: disable=consider-using-generator, protected-access, too-many-positional-arguments
 # pylint: disable=possibly-used-before-assignment
 
@@ -500,7 +500,7 @@ def _molecular_hamiltonian(
     args=None,
     load_data=False,
     convert_tol=1e12,
-):  # pylint:disable=too-many-arguments, too-many-statements
+):  # pylint: disable=too-many-arguments
     r"""Generate the qubit Hamiltonian of a molecule."""
 
     method = method.strip().lower()
@@ -527,7 +527,7 @@ def _molecular_hamiltonian(
 
     if wires:
         wires_new = qml.qchem.convert._process_wires(wires)
-        wires_map = dict(zip(range(len(wires_new)), list(wires_new.labels)))
+        wires_map = dict(zip(range(len(wires_new)), list(wires_new.labels), strict=True))
 
     if method in ("dhf", "pyscf"):
         n_electrons = sum([atomic_numbers[s] for s in symbols]) - charge
@@ -569,7 +569,7 @@ def _molecular_hamiltonian(
 
         h_as_ps = qml.pauli.pauli_sentence(h)
         coeffs = qml.math.real(qml.math.array(list(h_as_ps.values()), **interface_args))
-        h_as_ps = qml.pauli.PauliSentence(dict(zip(h_as_ps.keys(), coeffs)))
+        h_as_ps = qml.pauli.PauliSentence(dict(zip(h_as_ps.keys(), coeffs, strict=True)))
         h = qml.s_prod(0, qml.Identity(h.wires[0])) if len(h_as_ps) == 0 else h_as_ps.operation()
 
         if wires:

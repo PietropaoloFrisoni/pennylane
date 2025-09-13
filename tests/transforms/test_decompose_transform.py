@@ -16,11 +16,14 @@
 
 import warnings
 
+import numpy as np
 import pytest
 
 import pennylane as qml
 import pennylane.numpy as qnp
+from pennylane.measurements import MidMeasureMP
 from pennylane.operation import Operation
+from pennylane.ops import Conditional
 from pennylane.transforms.decompose import _operator_decomposition_gen, decompose
 
 # pylint: disable=unnecessary-lambda-assignment
@@ -83,17 +86,26 @@ class TestDecompose:
             [qml.CNOT([0, 1]), qml.CNOT([1, 0]), qml.CNOT([0, 1])],
             None,
         ),
-        (
-            [qml.Toffoli([0, 1, 2])],
-            {qml.Toffoli},
-            [qml.Toffoli([0, 1, 2])],
-            None,
-        ),
+        ([qml.Toffoli([0, 1, 2])], {qml.Toffoli}, [qml.Toffoli([0, 1, 2])], None),
         (
             [qml.measurements.MidMeasureMP(0)],
             {},
             [qml.measurements.MidMeasureMP(0)],
-            "MidMeasureMP",
+            {
+                "type": TypeError,
+                "msg": "Specifying the gate_set with a dictionary of operator types and their weights is only supported "
+                "with the new experimental graph-based decomposition system. Enable the new system "
+                "using qml.decomposition.enable_graph()",
+            },
+        ),
+        (
+            [qml.Toffoli([0, 1, 2]), qml.measurements.MidMeasureMP(0)],
+            {qml.Toffoli},
+            [qml.Toffoli([0, 1, 2]), qml.measurements.MidMeasureMP(0)],
+            {
+                "type": UserWarning,
+                "msg": "MidMeasureMP",
+            },
         ),
     ]
 
@@ -145,22 +157,26 @@ class TestDecompose:
         """Test that a recursion error is raised if decomposition enters an infinite loop."""
         tape = qml.tape.QuantumScript([InfiniteOp(1.23, 0)])
         with pytest.raises(RecursionError, match=r"Reached recursion limit trying to decompose"):
-            decompose(tape, lambda obj: obj.has_matrix)
+            decompose(tape, gate_set=lambda obj: obj.has_matrix)
 
-    @pytest.mark.parametrize("initial_ops, gate_set, expected_ops, warning_pattern", iterables_test)
-    def test_iterable_gate_set(self, initial_ops, gate_set, expected_ops, warning_pattern):
+    @pytest.mark.parametrize(
+        "initial_ops, gate_set, expected_ops, warning_or_error_pattern", iterables_test
+    )
+    def test_iterable_gate_set(self, initial_ops, gate_set, expected_ops, warning_or_error_pattern):
         """Tests that gate sets defined with iterables decompose correctly"""
         tape = qml.tape.QuantumScript(initial_ops)
 
-        if warning_pattern is not None:
-            with pytest.warns(UserWarning, match=warning_pattern):
+        if warning_or_error_pattern is not None:
+            with pytest.raises(
+                warning_or_error_pattern["type"], match=warning_or_error_pattern["msg"]
+            ):
                 (decomposed_tape,), _ = decompose(tape, gate_set=gate_set)
+                expected_tape = qml.tape.QuantumScript(expected_ops)
+                qml.assert_equal(decomposed_tape, expected_tape)
         else:
             (decomposed_tape,), _ = decompose(tape, gate_set=gate_set)
-
-        expected_tape = qml.tape.QuantumScript(expected_ops)
-
-        qml.assert_equal(decomposed_tape, expected_tape)
+            expected_tape = qml.tape.QuantumScript(expected_ops)
+            qml.assert_equal(decomposed_tape, expected_tape)
 
     @pytest.mark.parametrize("initial_ops, gate_set, expected_ops, warning_pattern", callables_test)
     def test_callable_gate_set(self, initial_ops, gate_set, expected_ops, warning_pattern):
@@ -176,6 +192,66 @@ class TestDecompose:
         expected_tape = qml.tape.QuantumScript(expected_ops)
 
         qml.assert_equal(decomposed_tape, expected_tape)
+
+    def test_decompose_with_mcm(self):
+        """Tests that circuits and decomposition rules containing MCMs are supported."""
+
+        class CustomOp(Operation):  # pylint: disable=too-few-public-methods
+
+            resource_keys = set()
+
+            @property
+            def resource_params(self) -> dict:
+                return {}
+
+            def decomposition(self):
+                ops = [qml.H(0)]
+                m = qml.measure(0)
+                ops += m.measurements
+                ops.append(qml.ops.Conditional(m0, qml.H(1)))
+                return ops
+
+        m0 = qml.measure(0)
+        tape = qml.tape.QuantumScript(
+            [
+                CustomOp(wires=(0, 1)),
+                m0.measurements[0],
+                qml.ops.Conditional(m0, qml.X(0)),
+                qml.ops.Conditional(m0, qml.RX(0.5, wires=0)),
+            ]
+        )
+        [decomposed_tape], _ = qml.transforms.decompose(
+            [tape], gate_set={qml.RX, qml.RZ, MidMeasureMP}
+        )
+        assert len(decomposed_tape.operations) == 10
+
+        with qml.queuing.AnnotatedQueue() as q:
+            qml.RZ(np.pi / 2, wires=0)
+            qml.RX(np.pi / 2, wires=0)
+            qml.RZ(np.pi / 2, wires=0)
+            m0 = qml.measure(0)
+            qml.cond(m0, qml.RZ)(np.pi / 2, wires=1)
+            qml.cond(m0, qml.RX)(np.pi / 2, wires=1)
+            qml.cond(m0, qml.RZ)(np.pi / 2, wires=1)
+            m1 = qml.measure(0)
+            qml.cond(m1, qml.RX)(np.pi, wires=0)
+            qml.cond(m1, qml.RX)(0.5, wires=0)
+
+        qml.assert_equal(decomposed_tape.operations[0], q.queue[0])
+        qml.assert_equal(decomposed_tape.operations[1], q.queue[1])
+        qml.assert_equal(decomposed_tape.operations[2], q.queue[2])
+        assert isinstance(decomposed_tape.operations[4], Conditional)
+        assert isinstance(decomposed_tape.operations[5], Conditional)
+        assert isinstance(decomposed_tape.operations[6], Conditional)
+        assert isinstance(decomposed_tape.operations[8], Conditional)
+        assert isinstance(decomposed_tape.operations[9], Conditional)
+        qml.assert_equal(decomposed_tape.operations[4].base, q.queue[4].base)
+        qml.assert_equal(decomposed_tape.operations[5].base, q.queue[5].base)
+        qml.assert_equal(decomposed_tape.operations[6].base, q.queue[6].base)
+        qml.assert_equal(decomposed_tape.operations[8].base, q.queue[8].base)
+        qml.assert_equal(decomposed_tape.operations[9].base, q.queue[9].base)
+        assert isinstance(decomposed_tape.operations[3], MidMeasureMP)
+        assert isinstance(decomposed_tape.operations[7], MidMeasureMP)
 
 
 def test_null_postprocessing():
@@ -243,3 +319,27 @@ class TestPrivateHelpers:
         final_decomp = list(_operator_decomposition_gen(op, stopping_condition, max_expansion=5))
 
         qml.assert_equal(op, final_decomp[0])
+
+    @pytest.mark.unit
+    def test_no_both_gate_set_and_stopping_condition_graph_disabled(self):
+        """Tests that with graph disabled, gate_set and stopping_condition cannot both exist."""
+
+        tape = qml.tape.QuantumScript([])
+
+        def stopping_condition(op):  # pylint: disable=unused-argument
+            return True
+
+        with pytest.raises(TypeError, match="Specifying both gate_set and stopping_condition"):
+            qml.transforms.decompose(
+                tape,
+                gate_set={qml.RZ, qml.RY, qml.GlobalPhase, qml.CNOT},
+                stopping_condition=stopping_condition,
+            )
+
+    @pytest.mark.unit
+    def test_invalid_gate_set(self):
+        """Tests that an invalid gate set raises a TypeError."""
+
+        tape = qml.tape.QuantumScript([])
+        with pytest.raises(TypeError, match="Invalid gate_set type."):
+            qml.transforms.decompose(tape, gate_set=123)

@@ -28,19 +28,20 @@ from pennylane.devices.default_mixed import (
     observable_stopping_condition,
     stopping_condition,
 )
+from pennylane.exceptions import DeviceError
 
 
 # pylint: disable=protected-access
 def test_mid_circuit_measurement_preprocessing():
     """Test mid-circuit measurement preprocessing not supported with default.mixed device."""
-    dev = DefaultMixed(wires=2, shots=1000)
+    dev = DefaultMixed(wires=2)
 
     # Define operations and mid-circuit measurement
     m0 = qml.measure(0)
     ops = [*m0.measurements, qml.ops.Conditional(m0, qml.X(0))]
 
     # Construct the QuantumScript
-    tape = qml.tape.QuantumScript(ops, [qml.expval(qml.Z(0))])
+    tape = qml.tape.QuantumScript(ops, [qml.expval(qml.Z(0))], shots=1000)
 
     # Process the tape with the device's preprocess method
     transform_program, _ = dev.preprocess()
@@ -91,7 +92,7 @@ class TestPreprocessing:
         dev = DefaultMixed()
 
         config = ExecutionConfig(device_options={"invalid_option": "val"})
-        with pytest.raises(qml.DeviceError, match="device option invalid_option"):
+        with pytest.raises(DeviceError, match="device option invalid_option"):
             dev.preprocess(config)
 
     def test_chooses_best_gradient_method(self):
@@ -318,7 +319,7 @@ class TestPreprocessing:
         ]
 
         program, _ = DefaultMixed(wires=2).preprocess()
-        with pytest.raises(qml.DeviceError, match="Operator NoMatNoDecompOp"):
+        with pytest.raises(DeviceError, match="Operator NoMatNoDecompOp"):
             program(tapes)
 
     @pytest.mark.parametrize(
@@ -394,7 +395,7 @@ class TestPreprocessing:
 
         seed = jax.random.PRNGKey(42)
 
-        dev = DefaultMixed(wires=1, seed=seed, shots=100)
+        dev = DefaultMixed(wires=1, seed=seed)
 
         # Preprocess the device
         _ = dev.preprocess()

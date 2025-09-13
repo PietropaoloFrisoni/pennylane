@@ -19,6 +19,7 @@ import pytest
 
 import pennylane as qml
 from pennylane import numpy as np
+from pennylane.ops.functions.assert_valid import _test_decomposition_rule
 from pennylane.templates.subroutines.phase_adder import _add_k_fourier
 
 
@@ -128,8 +129,9 @@ class TestPhaseAdder:
         self, k, x_wires, mod, work_wire, x
     ):  # pylint: disable=too-many-arguments
         """Test the correctness of the PhaseAdder template output."""
-        dev = qml.device("default.qubit", shots=1)
+        dev = qml.device("default.qubit")
 
+        @qml.set_shots(1)
         @qml.qnode(dev)
         def circuit(x):
             qml.BasisEmbedding(x, wires=x_wires)
@@ -143,7 +145,7 @@ class TestPhaseAdder:
 
         # pylint: disable=bad-reversed-sequence
         assert np.allclose(
-            sum(bit * (2**i) for i, bit in enumerate(reversed(circuit(x)))), (x + k) % mod
+            sum(bit * (2**i) for i, bit in enumerate(reversed(circuit(x)[0, :]))), (x + k) % mod
         )
 
     @pytest.mark.parametrize(
@@ -227,6 +229,7 @@ class TestPhaseAdder:
 
     def test_decomposition(self):
         """Test that compute_decomposition and decomposition work as expected."""
+
         k = 4
         x_wires = [1, 2, 3]
         mod = 7
@@ -256,6 +259,17 @@ class TestPhaseAdder:
         for op1, op2 in zip(phase_adder_decomposition, op_list):
             qml.assert_equal(op1, op2)
 
+    @pytest.mark.parametrize("mod", [7, 8])
+    def test_decomposition_new(self, mod):
+        """Tests the decomposition rule implemented with the new system."""
+
+        k = 4
+        x_wires = [1, 2, 3]
+        work_wire = [0]
+        op = qml.PhaseAdder(k, x_wires, mod, work_wire)
+        for rule in qml.list_decomps(qml.PhaseAdder):
+            _test_decomposition_rule(op, rule)
+
     def test_work_wires_added_correctly(self):
         """Test that no work wires are added if work_wire = None"""
         wires = qml.PhaseAdder(1, x_wires=[1, 2]).wires
@@ -273,9 +287,10 @@ class TestPhaseAdder:
         mod = 7
         x_wires = [0, 1, 2]
         work_wire = [4]
-        dev = qml.device("default.qubit", shots=1)
+        dev = qml.device("default.qubit")
 
         @jax.jit
+        @qml.set_shots(1)
         @qml.qnode(dev)
         def circuit():
             qml.BasisEmbedding(x, wires=x_wires)
@@ -286,5 +301,5 @@ class TestPhaseAdder:
 
         # pylint: disable=bad-reversed-sequence
         assert jax.numpy.allclose(
-            sum(bit * (2**i) for i, bit in enumerate(reversed(circuit()))), (x + k) % mod
+            sum(bit * (2**i) for i, bit in enumerate(reversed(circuit()[0, :]))), (x + k) % mod
         )

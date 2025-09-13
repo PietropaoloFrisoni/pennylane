@@ -18,7 +18,7 @@ method.
 # pylint: disable=no-self-use, too-many-arguments, too-many-instance-attributes, too-many-positional-arguments
 import numpy as np
 
-from pennylane.operation import AnyWires, Operation
+from pennylane.operation import Operation
 from pennylane.qchem import factorize
 
 
@@ -36,7 +36,7 @@ class DoubleFactorization(Operation):
         rank_m (int): average rank of the second factorization of the two-electron integral tensor
         tol_factor (float): threshold error value for discarding the negligible factors
         tol_eigval (float): threshold error value for discarding the negligible factor eigenvalues
-        br (int): number of bits for ancilla qubit rotation
+        br (int): number of bits for auxiliary qubit rotation
         alpha (int): number of bits for the keep register
         beta (int): number of bits for the rotation angles
         chemist_notation (bool): if True, the two-electron integrals need to be in chemist notation
@@ -87,7 +87,6 @@ class DoubleFactorization(Operation):
         of [`PRX Quantum 2, 030305 (2021) <https://journals.aps.org/prxquantum/abstract/10.1103/PRXQuantum.2.030305>`_].
     """
 
-    num_wires = AnyWires
     grad_method = None
 
     def __init__(
@@ -320,7 +319,7 @@ class DoubleFactorization(Operation):
             rank_r (int): rank of the first factorization of the two-electron integral tensor
             rank_m (float): average rank of the second factorization of the two-electron tensor
             rank_max (int): maximum rank of the second factorization of the two-electron tensor
-            br (int): number of bits for ancilla qubit rotation
+            br (int): number of bits for auxiliary qubit rotation
             alpha (int): number of bits for the keep register
             beta (int): number of bits for the rotation angles
 
@@ -404,7 +403,7 @@ class DoubleFactorization(Operation):
             rank_r (int): rank of the first factorization of the two-electron integral tensor
             rank_m (float): average rank of the second factorization of the two-electron tensor
             rank_max (int): maximum rank of the second factorization of the two-electron tensor
-            br (int): number of bits for ancilla qubit rotation
+            br (int): number of bits for auxiliary qubit rotation
             alpha (int): number of bits for the keep register
             beta (int): number of bits for the rotation angles
 
@@ -473,7 +472,7 @@ class DoubleFactorization(Operation):
             rank_r (int): rank of the first factorization of the two-electron integral tensor
             rank_m (float): average rank of the second factorization of the two-electron tensor
             rank_max (int): maximum rank of the second factorization of the two-electron tensor
-            br (int): number of bits for ancilla qubit rotation
+            br (int): number of bits for auxiliary qubit rotation
             alpha (int): number of bits for the keep register
             beta (int): number of bits for the rotation angles
 

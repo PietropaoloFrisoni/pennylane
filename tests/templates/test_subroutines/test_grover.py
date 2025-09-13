@@ -21,7 +21,9 @@ import numpy as np
 import pytest
 
 import pennylane as qml
+from pennylane.capture.autograph import run_autograph
 from pennylane.ops import Hadamard, MultiControlledX, PauliZ
+from pennylane.ops.functions.assert_valid import _test_decomposition_rule
 
 
 def test_repr():
@@ -208,6 +210,23 @@ def test_expand(wires):
         assert actual_op.wires == qml.wires.Wires(expected_wire)
 
 
+@pytest.mark.capture
+def test_decomposition_new_capture():
+    """Tests the decomposition rule implemented with the new system."""
+    op = qml.GroverOperator(wires=(0, 1, 2))
+
+    for rule in qml.list_decomps(qml.GroverOperator):
+        _test_decomposition_rule(op, rule)
+
+
+def test_decomposition_new():
+    """Tests the decomposition rule implemented with the new system."""
+    op = qml.GroverOperator(wires=(0, 1, 2))
+
+    for rule in qml.list_decomps(qml.GroverOperator):
+        _test_decomposition_rule(op, rule)
+
+
 @pytest.mark.parametrize("n_wires", [6, 13])
 def test_findstate(n_wires):
     """Asserts can find state marked by oracle, with operation full matrix and decomposition."""
@@ -293,7 +312,7 @@ def test_jax_jit():
 
 
 @pytest.mark.jax
-@pytest.mark.usefixtures("enable_disable_plxpr")
+@pytest.mark.capture
 # pylint:disable=protected-access
 class TestDynamicDecomposition:
     """Tests that dynamic decomposition via compute_qfunc_decomposition works correctly."""
@@ -312,11 +331,11 @@ class TestDynamicDecomposition:
         max_expansion = 1
 
         @DecomposeInterpreter(max_expansion=max_expansion, gate_set=gate_set)
-        def circuit(work_wires, wires):
+        def circuit(wires):
             qml.GroverOperator(wires=wires, work_wires=work_wires)
             return qml.state()
 
-        jaxpr = jax.make_jaxpr(circuit)(wires=wires, work_wires=work_wires)
+        jaxpr = jax.make_jaxpr(circuit)(wires)
 
         # Validate Jaxpr
         jaxpr_eqns = jaxpr.eqns
@@ -339,7 +358,7 @@ class TestDynamicDecomposition:
 
         # Validate Ops
         collector = CollectOpsandMeas()
-        collector.eval(jaxpr.jaxpr, jaxpr.consts, *wires, work_wires)
+        collector.eval(jaxpr.jaxpr, jaxpr.consts, *wires)
         ops_list = collector.state["ops"]
 
         tape = qml.tape.QuantumScript([qml.GroverOperator(wires=wires, work_wires=work_wires)])
@@ -370,7 +389,7 @@ class TestDynamicDecomposition:
     )
     def test_grover(
         self, max_expansion, gate_set, wires, work_wires, autograph
-    ):  # pylint:disable=too-many-arguments
+    ):  # pylint:disable=too-many-arguments, too-many-positional-arguments
         """Test that Grover gives correct result after dynamic decomposition."""
 
         from functools import partial
@@ -380,18 +399,20 @@ class TestDynamicDecomposition:
         from pennylane.transforms.decompose import DecomposeInterpreter
 
         @DecomposeInterpreter(max_expansion=max_expansion, gate_set=gate_set)
-        @qml.qnode(device=qml.device("default.qubit", wires=5), autograph=autograph)
-        def circuit(wires, work_wires):
+        @qml.qnode(device=qml.device("default.qubit", wires=5))
+        def circuit(wires):
             qml.GroverOperator(wires=wires, work_wires=work_wires)
             return qml.state()
 
-        jaxpr = jax.make_jaxpr(circuit)(wires=wires, work_wires=work_wires)
-        result = jax.core.eval_jaxpr(jaxpr.jaxpr, jaxpr.consts, *wires, *work_wires)
+        if autograph:
+            circuit = run_autograph(circuit)
+        jaxpr = jax.make_jaxpr(circuit)(wires)
+        result = jax.core.eval_jaxpr(jaxpr.jaxpr, jaxpr.consts, *wires)
 
         with qml.capture.pause():
 
             @partial(qml.transforms.decompose, max_expansion=max_expansion, gate_set=gate_set)
-            @qml.qnode(device=qml.device("default.qubit", wires=5), autograph=False)
+            @qml.qnode(device=qml.device("default.qubit", wires=5))
             def circuit_comparison():
                 qml.GroverOperator(wires=wires, work_wires=work_wires)
                 return qml.state()
