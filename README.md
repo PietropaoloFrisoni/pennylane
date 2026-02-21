@@ -1,21 +1,10 @@
-<p align="center">
-<img width="200" height="46" alt="UFoundation_logosmall" src="https://github.com/user-attachments/assets/643e69cd-3d41-42f9-a9e8-ac113e8b6de3" />
-</p>
+<img src="https://assets.cloud.pennylane.ai/pennylane_website/spotlights/Spotlight_PLSurvey_2024-03-05.png"
+     width="200px"
+     align="left" />
 
-<h2 align="center"> The 2025 Quantum Open Source Software Survey is now open. 👉 <a href="https://unitary.foundation/posts/2025_qoss_survey/" target="_blank">Take the survey!</a> 👈</h2>
+Help us shape the future of PennyLane. We’d really appreciate a few minutes of your time to share feedback through our quantum programming survey. [Take the survey!](https://bit.ly/pl-survey-2026-g) (Survey closes Feb. 19, 2026)
 
-<p align="center">
-Take 10 minutes to share your voice and help build a better quantum computing ecosystem!
-</p>
-
-<p align="center"><img width="200" alt="UFoundation_logosmall" src="https://assets.cloud.pennylane.ai/pennylane_website/spotlights/Spotlight_UnitaryFundSurvey.png" /></p>
-
-<p align="center">
-Survey closes October 3, 2025
-</p>
-
-<br>
-<br>
+<br clear=left>
 <br>
 
 <p align="center">
@@ -62,6 +51,7 @@ Survey closes October 3, 2025
     -->
     <img src="./doc/_static/readme/pl-logo-darkmode.png#gh-dark-mode-only" width="700px" onerror="this.style.display='none'" alt=""/>
 </p>
+
 
 ## Key Features
 

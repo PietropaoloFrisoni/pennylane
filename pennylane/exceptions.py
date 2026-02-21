@@ -75,6 +75,7 @@ User Warnings
     ~PennyLaneDeprecationWarning
     ~ExperimentalWarning
     ~AutoGraphWarning
+    ~DecompositionWarning
 
 """  # pragma: no cover
 
@@ -172,6 +173,10 @@ class ParameterFrequenciesUndefinedError(OperatorPropertyUndefined):
     does not have parameter_frequencies"""
 
 
+class ResourcesUndefinedError(Exception):
+    r"""Exception to be raised when a ``ResourceOperator`` does not implement resource_decomp"""
+
+
 # =============================================================================
 # Warnings
 # =============================================================================
@@ -187,6 +192,14 @@ class ExperimentalWarning(UserWarning):
 
 class AutoGraphWarning(Warning):
     """Warnings related to PennyLane's AutoGraph submodule."""
+
+
+class CaptureWarning(Warning):
+    """Warnings related to the capture of the program into a condensed PLxPR format."""
+
+
+class DecompositionWarning(Warning):
+    """Warning when a decomposition rule isn't found by the graph."""
 
 
 # =============================================================================

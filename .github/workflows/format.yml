@@ -9,6 +9,7 @@ on:
       - reopened
       - synchronize
       - ready_for_review
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -34,10 +35,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
-        run: pip install black pylint==3.3.7 isort==6.0.1
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/checkout@v4
+      - name: Install Python dependencies
+        run: pip install --group dev
 
       - name: Run Black
         run: |
@@ -51,8 +53,8 @@ jobs:
 
       - name: Run Pylint (source files)
         if: always()
-        run: pylint --rcfile .pylintrc $(find pennylane -name "*.py")
+        run: python -m pylint --rcfile .pylintrc $(find pennylane -name "*.py")
 
       - name: Run Pylint (test files)
         if: always()
-        run: pylint --rcfile tests/.pylintrc $(find tests -name "*.py")
+        run: python -m pylint --rcfile tests/.pylintrc $(find tests -name "*.py")

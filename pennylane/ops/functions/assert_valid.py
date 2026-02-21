@@ -29,6 +29,8 @@ import pennylane as qml
 from pennylane.decomposition import DecompositionRule
 from pennylane.exceptions import EigvalsUndefinedError
 
+from .equal import assert_equal
+
 
 def _assert_error_raised(func, error, failure_comment):
     def inner_func(*args, **kwargs):
@@ -81,7 +83,8 @@ def _check_decomposition(op, skip_wire_mapping):
             orig_decomp = op.decomposition()
             for mapped_op, orig_op in zip(mapped_decomp, orig_decomp):
                 assert (
-                    mapped_op.wires == qml.map_wires(orig_op, wire_map).wires
+                    mapped_op.wires
+                    == qml.map_wires(orig_op, wire_map).wires  # pylint: disable=no-member
                 ), "Operators in decomposition of wire-mapped operator must have mapped wires."
     else:
         failure_comment = "If has_decomposition is False, then decomposition must raise a ``DecompositionUndefinedError``."
@@ -97,32 +100,32 @@ def _check_decomposition(op, skip_wire_mapping):
         )(*op.data, wires=op.wires, **op.hyperparameters)
 
 
-def _check_decomposition_new(op, heuristic_resources=False):
+def _check_decomposition_new(op, skip_decomp_matrix_check=False):
     """Checks involving the new system of decompositions."""
-
-    if type(op).resource_params is qml.operation.Operator.resource_params:
+    op_type = type(op)
+    if op_type.resource_params is qml.operation.Operator.resource_params:
         assert not qml.decomposition.has_decomp(
-            type(op)
+            op_type
         ), "resource_params must be defined for operators with decompositions"
         return
 
     assert set(op.resource_params.keys()) == set(
-        type(op).resource_keys
+        op_type.resource_keys
     ), "resource_params must have the same keys as specified by resource_keys"
 
-    for rule in qml.list_decomps(type(op)):
-        _test_decomposition_rule(op, rule, heuristic_resources=heuristic_resources)
+    for rule in qml.list_decomps(op_type):
+        _test_decomposition_rule(op, rule, skip_decomp_matrix_check)
 
-    for rule in qml.list_decomps(f"Adjoint({type(op).__name__})"):
+    for rule in qml.list_decomps(f"Adjoint({op_type.__name__})"):
         adj_op = qml.ops.Adjoint(op)
-        _test_decomposition_rule(adj_op, rule, heuristic_resources=heuristic_resources)
+        _test_decomposition_rule(adj_op, rule, skip_decomp_matrix_check)
 
-    for rule in qml.list_decomps(f"Pow({type(op).__name__})"):
+    for rule in qml.list_decomps(f"Pow({op_type.__name__})"):
         for z in [2, 3, 4, 8, 9]:
             pow_op = qml.ops.Pow(op, z)
-            _test_decomposition_rule(pow_op, rule, heuristic_resources=heuristic_resources)
+            _test_decomposition_rule(pow_op, rule, skip_decomp_matrix_check)
 
-    for rule in qml.list_decomps(f"C({type(op).__name__})"):
+    for rule in qml.list_decomps(f"C({op_type.__name__})"):
         for n_ctrl_wires, c_value, n_workers in itertools.product([1, 2, 3], [0, 1], [0, 1, 2]):
             ctrl_op = qml.ops.Controlled(
                 op,
@@ -130,10 +133,10 @@ def _check_decomposition_new(op, heuristic_resources=False):
                 control_values=[c_value] * n_ctrl_wires,
                 work_wires=[i + len(op.wires) + n_ctrl_wires for i in range(n_workers)],
             )
-            _test_decomposition_rule(ctrl_op, rule, heuristic_resources=heuristic_resources)
+            _test_decomposition_rule(ctrl_op, rule, skip_decomp_matrix_check)
 
 
-def _test_decomposition_rule(op, rule: DecompositionRule, heuristic_resources=False):
+def _test_decomposition_rule(op, rule: DecompositionRule, skip_decomp_matrix_check: bool = False):
     """Tests that a decomposition rule is consistent with the operator."""
 
     if not rule.is_applicable(**op.resource_params):
@@ -155,28 +158,31 @@ def _test_decomposition_rule(op, rule: DecompositionRule, heuristic_resources=Fa
 
     actual_gate_counts = defaultdict(int)
     for _op in tape.operations:
+        if isinstance(_op, qml.ops.Conditional):
+            _op = _op.base
         resource_rep = qml.resource_rep(type(_op), **_op.resource_params)
         actual_gate_counts[resource_rep] += 1
 
-    if heuristic_resources:
+    if rule.exact_resources:
+        non_zero_gate_counts = {k: v for k, v in gate_counts.items() if v > 0}
+        assert non_zero_gate_counts == actual_gate_counts, (
+            f"\nGate counts expected from resource function:\n{non_zero_gate_counts}"
+            f"\nActual gate counts:\n{dict(actual_gate_counts)}"
+        )
+    else:
         # If the resource estimate is not expected to match exactly to the actual
         # decomposition, at least make sure that all gates are accounted for.
         assert all(op in gate_counts for op in actual_gate_counts)
-    else:
-        non_zero_gate_counts = {k: v for k, v in gate_counts.items() if v > 0}
-        assert (
-            non_zero_gate_counts == actual_gate_counts
-        ), f"{non_zero_gate_counts} != {actual_gate_counts}"
-
-    # Add projector to the additional wires (work wires) on the tape
-    work_wires = tape.wires - op.wires
-    all_wires = op.wires + work_wires
-    if work_wires:
-        op = op @ qml.Projector([0] * len(work_wires), wires=work_wires)
-        tape.operations.insert(0, qml.Projector([0] * len(work_wires), wires=work_wires))
 
     # Tests that the decomposition produces the same matrix
-    if op.has_matrix:
+    if op.has_matrix and not skip_decomp_matrix_check:
+        # Add projector to the additional wires (work wires) on the tape
+        work_wires = tape.wires - op.wires
+        all_wires = op.wires + work_wires
+        if work_wires:
+            op = op @ qml.Projector([0] * len(work_wires), wires=work_wires)
+            tape.operations.insert(0, qml.Projector([0] * len(work_wires), wires=work_wires))
+
         op_matrix = op.matrix(wire_order=all_wires)
         decomp_matrix = qml.matrix(tape, wire_order=all_wires)
         assert qml.math.allclose(
@@ -314,7 +320,10 @@ def _check_copy(op, skip_deepcopy):
     assert copied_op == op, "copied op must be equivalent to original operation"
     assert copied_op is not op, "copied op must be a separate instance from original operaiton"
     if not skip_deepcopy:
-        assert qml.equal(copy.deepcopy(op), op), "deep copied op must also be equal"
+        try:
+            assert_equal(copy.deepcopy(op), op)
+        except AssertionError as e:
+            raise AssertionError("deep copied op must also be equal") from e
 
 
 # pylint: disable=import-outside-toplevel, protected-access
@@ -336,8 +345,12 @@ def _check_pytree(op):
             f"\nFor local testing, try type(op)._unflatten(*op._flatten())"
         )
         raise AssertionError(message) from e
-    assert op == new_op, "metadata and data must be able to reproduce the original operation"
-
+    try:
+        assert_equal(op, new_op)
+    except AssertionError as e:
+        raise AssertionError(
+            "metadata and data must be able to reproduce the original operation"
+        ) from e
     try:
         import jax
     except ImportError:
@@ -353,6 +366,8 @@ def _check_pytree(op):
 
 
 def _check_capture(op):
+    if isinstance(op, qml.templates.SubroutineOp):
+        return
     try:
         import jax
     except ImportError:
@@ -370,7 +385,12 @@ def _check_capture(op):
 
         jaxpr = jax.make_jaxpr(test_fn)(*data)
         new_op = jax.core.eval_jaxpr(jaxpr.jaxpr, jaxpr.consts, *data)[0]
-        assert op == new_op
+        assert_equal(op, new_op)
+
+        leaves = jax.tree_util.tree_leaves(jaxpr.eqns[-1].params)
+        assert not any(
+            qml.math.is_abstract(l) for l in leaves
+        ), "capture params cannot contain tracers"
     except Exception as e:
         raise ValueError(
             "The capture of the operation into jaxpr failed somehow."
@@ -434,7 +454,6 @@ def _check_differentiation(op):
 def _check_wires(op, skip_wire_mapping):
     """Check that wires are a ``Wires`` class and can be mapped."""
     assert isinstance(op.wires, qml.wires.Wires), "wires must be a wires instance"
-
     if skip_wire_mapping:
         return
     wire_map = {w: ascii_lowercase[i] for i, w in enumerate(op.wires)}
@@ -450,9 +469,10 @@ def assert_valid(
     skip_deepcopy=False,
     skip_differentiation=False,
     skip_new_decomp=False,
+    skip_decomp_matrix_check=False,
     skip_pickle=False,
     skip_wire_mapping=False,
-    heuristic_resources=False,
+    skip_capture=False,
 ) -> None:
     """Runs basic validation checks on an :class:`~.operation.Operator` to make
     sure it has been correctly defined.
@@ -465,11 +485,12 @@ def assert_valid(
         skip_differentiation=False: If ``True``, differentiation tests are not run.
         skip_new_decomp: If ``True``, the operator will not be tested for its decomposition
             defined using the new system.
+        skip_decomp_matrix_check: If ``True``, the decomposition rule check will only
+            verify that the produced operators match the resource function, and does not
+            test that the matrix of the decomposition matches the operator itself.
         skip_pickle=False : If ``True``, pickling tests are not run. Set to ``True`` when
             testing a locally defined operator, as pickle cannot handle local objects
         skip_wire_mapping : If ``True``, the operator will not be tested for wire mapping.
-        heuristic_resources: If ``True``, the decomposition is not required to match exactly
-            with the registered resource estimate.
 
     **Examples:**
 
@@ -483,10 +504,11 @@ def assert_valid(
 
         op = MyOp(qml.numpy.array(0.5), wires=0)
 
-    .. code-block::
-
-        >>> assert_valid(op)
-        AssertionError: op.data must be a tuple
+    >>> assert_valid(op)
+    Traceback (most recent call last):
+        ...
+    AssertionError: MyOp._unflatten must be able to reproduce the original operation from () and (Wires([0]), ()). You may need to override either the _unflatten or _flatten method.
+    For local testing, try type(op)._unflatten(*op._flatten())
 
     .. code-block:: python
 
@@ -497,11 +519,11 @@ def assert_valid(
                 super().__init__(wires=wires)
 
         op = MyOp(wires = 0)
-        assert_valid(op)
 
-    .. code-block::
-
-        ValueError: metadata output from _flatten must be hashable. This also applies to hyperparameters
+    >>> assert_valid(op)
+    Traceback (most recent call last):
+        ...
+    AssertionError: metadata output from _flatten must be hashable. Got metadata (Wires([0]), (('unhashable_list', []),))
 
     """
 
@@ -520,7 +542,7 @@ def assert_valid(
     _check_bind_new_parameters(op)
     _check_decomposition(op, skip_wire_mapping=skip_wire_mapping)
     if not skip_new_decomp:
-        _check_decomposition_new(op, heuristic_resources=heuristic_resources)
+        _check_decomposition_new(op, skip_decomp_matrix_check=skip_decomp_matrix_check)
     _check_matrix(op)
     _check_matrix_matches_decomp(op)
     _check_sparse_matrix(op)
@@ -528,4 +550,5 @@ def assert_valid(
     _check_generator(op)
     if not skip_differentiation:
         _check_differentiation(op)
-    _check_capture(op)
+    if not skip_capture:
+        _check_capture(op)

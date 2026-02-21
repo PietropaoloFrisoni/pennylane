@@ -14,6 +14,7 @@
 """
 This module contains the qml.counts measurement.
 """
+import warnings
 from collections.abc import Sequence
 
 import numpy as np
@@ -21,10 +22,11 @@ import numpy as np
 from pennylane import math
 from pennylane.exceptions import QuantumFunctionError
 from pennylane.operation import Operator
+from pennylane.ops import MeasurementValue
 from pennylane.typing import TensorLike
 from pennylane.wires import Wires
 
-from .measurement_value import MeasurementValue
+from .capture_measurements import _get_abstract_measurement
 from .measurements import SampleMeasurement
 from .process_samples import process_raw_samples
 
@@ -166,10 +168,9 @@ class CountsMP(SampleMeasurement):
 
              .. code-block:: python3
 
-                from functools import partial
                 dev = qml.device("default.qubit", wires=2)
 
-                @partial(qml.set_shots, shots=4)
+                @qml.set_shots(shots=4)
                 @qml.qnode(dev)
                 def circuit(x):
                     qml.RX(x, wires=0)
@@ -302,6 +303,70 @@ class CountsMP(SampleMeasurement):
                 outcome_counts[outcome_binary] = 0
 
 
+# pylint: disable=protected-access, unused-argument
+if CountsMP._wires_primitive is not None:
+
+    CountsMP._wires_primitive.multiple_results = True
+
+    @CountsMP._wires_primitive.def_impl
+    def _impl(*args, **kwargs):
+        raise NotImplementedError("Counts has no execution implementation with program capture.")
+
+    def _keys_eval(n_wires=None, has_eigvals=False, shots=None, num_device_wires=0):
+        if shots is None:
+            raise ValueError("finite shots are required to use CountsMP")
+        n_wires = n_wires or num_device_wires
+        return (2**n_wires,), int
+
+    def _values_eval(n_wires=None, has_eigvals=False, shots=None, num_device_wires=0):
+        if shots is None:
+            raise ValueError("finite shots are required to use CountsMP")
+        n_wires = n_wires or num_device_wires
+        return (2**n_wires,), int
+
+    abstract_mp = _get_abstract_measurement()
+
+    @CountsMP._wires_primitive.def_abstract_eval
+    def _abstract_eval(*args, has_eigvals=False, all_outcomes=False):
+        if not all_outcomes:
+            warnings.warn(
+                "all_outcomes=False is unsupported with program capture and qjit. Using all_outcomes=True",
+                UserWarning,
+            )
+        n_wires = len(args) - 1 if has_eigvals else len(args)
+        keys = abstract_mp(_keys_eval, n_wires=n_wires, has_eigvals=has_eigvals)
+        values = abstract_mp(_values_eval, n_wires=n_wires, has_eigvals=has_eigvals)
+        return keys, values
+
+
+# pylint: disable=protected-access, unused-argument
+if CountsMP._mcm_primitive is not None:
+
+    CountsMP._mcm_primitive.multiple_results = True
+
+    @CountsMP._mcm_primitive.def_impl
+    def _mcm_impl(*args, **kwargs):
+        raise NotImplementedError("Counts has no execution implementation with program capture.")
+
+    def _mcm_keys_eval(n_wires, has_eigvals=False, shots=None, num_device_wires=0):
+        if shots is None:
+            raise ValueError("finite shots are required to use CountsMP")
+        return (2**n_wires,), int
+
+    def _mcm_values_eval(n_wires, has_eigvals=False, shots=None, num_device_wires=0):
+        if shots is None:
+            raise ValueError("finite shots are required to use CountsMP")
+        return (2**n_wires,), int
+
+    abstract_mp = _get_abstract_measurement()
+
+    @CountsMP._mcm_primitive.def_abstract_eval
+    def _mcm_abstract_eval(*mcms, single_mcm, all_outcomes=False):
+        keys = abstract_mp(_mcm_keys_eval, n_wires=len(mcms), has_eigvals=False)
+        values = abstract_mp(_mcm_values_eval, n_wires=len(mcms), has_eigvals=False)
+        return keys, values
+
+
 def counts(
     op=None,
     wires=None,
@@ -343,10 +408,9 @@ def counts(
 
     .. code-block:: python3
 
-        from functools import partial
         dev = qml.device("default.qubit", wires=2)
 
-        @partial(qml.set_shots, shots=4)
+        @qml.set_shots(shots=4)
         @qml.qnode(dev)
         def circuit(x):
             qml.RX(x, wires=0)
@@ -366,10 +430,9 @@ def counts(
 
     .. code-block:: python3
 
-        from functools import partial
         dev = qml.device("default.qubit", wires=2)
 
-        @partial(qml.set_shots, shots=4)
+        @qml.set_shots(shots=4)
         @qml.qnode(dev)
         def circuit(x):
             qml.RX(x, wires=0)
@@ -386,10 +449,9 @@ def counts(
 
     .. code-block:: python3
 
-        from functools import partial
         dev = qml.device("default.qubit", wires=2)
 
-        @partial(qml.set_shots, shots=4)
+        @qml.set_shots(shots=4)
         @qml.qnode(dev)
         def circuit():
             qml.X(0)

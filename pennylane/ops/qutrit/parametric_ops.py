@@ -21,6 +21,8 @@ import functools
 import numpy as np
 
 import pennylane as qml
+from pennylane.decomposition import add_decomps
+from pennylane.decomposition.symbolic_decomposition import adjoint_rotation
 from pennylane.operation import Operation
 
 stack_last = functools.partial(qml.math.stack, axis=-1)
@@ -198,6 +200,9 @@ class TRX(Operation):
         return [TRX(self.data[0] * z, wires=self.wires, subspace=self.subspace)]
 
 
+add_decomps("Adjoint(TRX)", adjoint_rotation)
+
+
 class TRY(Operation):
     r"""
     The single qutrit Y rotation
@@ -232,17 +237,17 @@ class TRY(Operation):
     applies to:
 
     >>> qml.TRY(0.5, wires=0, subspace=(0, 1)).matrix()
-    array([[ 0.96891242+0.j, -0.24740396-0.j,  0.        +0.j],
-           [ 0.24740396+0.j,  0.96891242+0.j,  0.        +0.j],
+    array([[ 0.96891242+0.j, -0.24740396-0.j, -0.        -0.j],
+           [ 0.24740396+0.j,  0.96891242+0.j, -0.        -0.j],
            [ 0.        +0.j,  0.        +0.j,  1.        +0.j]])
 
     >>> qml.TRY(0.5, wires=0, subspace=(0, 2)).matrix()
-    array([[ 0.96891242+0.j,  0.        +0.j, -0.24740396-0.j],
-           [ 0.        +0.j,  1.        +0.j,  0.        +0.j],
+    array([[ 0.96891242+0.j, -0.        -0.j, -0.24740396-0.j],
+           [ 0.        +0.j,  1.        +0.j, -0.        -0.j],
            [ 0.24740396+0.j,  0.        +0.j,  0.96891242+0.j]])
 
     >>> qml.TRY(0.5, wires=0, subspace=(1, 2)).matrix()
-    array([[ 1.        +0.j,  0.        +0.j,  0.        +0.j],
+    array([[ 1.        +0.j, -0.        -0.j, -0.        -0.j],
            [ 0.        +0.j,  0.96891242+0.j, -0.24740396-0.j],
            [ 0.        +0.j,  0.24740396+0.j,  0.96891242+0.j]])
     """
@@ -303,8 +308,8 @@ class TRY(Operation):
         **Example**
 
         >>> qml.TRY.compute_matrix(torch.tensor(0.5), subspace=(0, 2))
-        tensor([[ 0.9689+0.j,  0.0000+0.j, -0.2474-0.j],
-                [ 0.0000+0.j,  1.0000+0.j,  0.0000+0.j],
+        tensor([[ 0.9689+0.j, -0.0000-0.j, -0.2474-0.j],
+                [ 0.0000+0.j,  1.0000+0.j, -0.0000-0.j],
                 [ 0.2474+0.j,  0.0000+0.j,  0.9689+0.j]])
         """
         c = qml.math.cos(theta / 2)
@@ -342,6 +347,9 @@ class TRY(Operation):
 
     def pow(self, z):
         return [TRY(self.data[0] * z, wires=self.wires, subspace=self.subspace)]
+
+
+add_decomps("Adjoint(TRY)", adjoint_rotation)
 
 
 class TRZ(Operation):
@@ -485,3 +493,6 @@ class TRZ(Operation):
 
     def pow(self, z):
         return [TRZ(self.data[0] * z, wires=self.wires, subspace=self.subspace)]
+
+
+add_decomps("Adjoint(TRZ)", adjoint_rotation)

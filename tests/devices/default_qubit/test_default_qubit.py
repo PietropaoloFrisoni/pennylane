@@ -14,7 +14,6 @@
 """Tests for default qubit."""
 # pylint: disable=import-outside-toplevel, no-member, too-many-arguments
 
-from multiprocessing import set_start_method
 from unittest import mock
 
 import numpy as np
@@ -23,8 +22,6 @@ import pytest
 import pennylane as qml
 from pennylane.devices import DefaultQubit, ExecutionConfig
 from pennylane.exceptions import DeviceError
-
-set_start_method("spawn")
 
 max_workers_list = [
     None,
@@ -161,9 +158,7 @@ class TestSupportsDerivatives:
         assert dev.supports_jvp(config, circuit=circuit) is False
         assert dev.supports_vjp(config, circuit=circuit) is False
 
-        circuit = qml.tape.QuantumScript(
-            [qml.measurements.MidMeasureMP(0)], [qml.expval(qml.PauliZ(0))]
-        )
+        circuit = qml.tape.QuantumScript([qml.ops.MidMeasure(0)], [qml.expval(qml.PauliZ(0))])
         assert dev.supports_derivatives(config, circuit=circuit) is False
         assert dev.supports_jvp(config, circuit=circuit) is False
         assert dev.supports_vjp(config, circuit=circuit) is False
@@ -1576,8 +1571,9 @@ class TestHamiltonianSamples:
         t2 = 6.2 * qml.prod(*(qml.PauliY(i) for i in range(n_wires)))
         H = t1 + t2
 
+        shots = 30000
         dev = DefaultQubit(seed=seed, max_workers=max_workers)
-        qs = qml.tape.QuantumScript(ops, [qml.expval(H)], shots=30000)
+        qs = qml.tape.QuantumScript(ops, [qml.expval(H)], shots=shots)
         res = dev.execute(qs)
 
         phase = offset + scale * np.array(range(n_wires))
@@ -1585,7 +1581,14 @@ class TestHamiltonianSamples:
         sines = qml.math.sin(phase)
         expected = 2.5 * qml.math.prod(cosines) + 6.2 * qml.math.prod(sines)
 
-        assert np.allclose(res, expected, rtol=0.05)
+        # Theoretical Standard Error Calculation
+        # <H^2> = 2.5^2 + 6.2^2 because cross terms vanish (<X> = 0 for RX states)
+        var_h_theoretical = (2.5**2 + 6.2**2) - expected**2
+        std_error = np.sqrt(var_h_theoretical / shots)
+
+        # Use 4-sigma tolerance to prevent flaky tests
+        # We use atol (absolute) because noise does not scale with the expectation value
+        assert np.allclose(res, expected, atol=4 * std_error)
 
     @pytest.mark.parametrize("max_workers", max_workers_list)
     def test_complex_hamiltonian(self, max_workers, seed):
@@ -1806,6 +1809,7 @@ def test_projector_dynamic_type(max_workers, n_wires):
         assert np.isclose(res, 1 / 2**n_wires)
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     "interface",
     [
@@ -1889,7 +1893,7 @@ class TestPostselection:
         if use_jit and (interface != "jax" or isinstance(shots, tuple)):
             pytest.skip("Cannot JIT in non-JAX interfaces, or with shot vectors.")
 
-        if isinstance(mp, qml.measurements.ClassicalShadowMP):
+        if isinstance(mp, qml.measurements.ShadowExpvalMP):
             mp.seed = seed
 
         dev = qml.device("default.qubit", seed=seed)
@@ -2124,6 +2128,72 @@ class TestPostselection:
                 )
                 if not 0 in expected_shape:  # No nan values if array is empty
                     assert qml.math.all(qml.math.isnan(r))
+
+    @pytest.mark.parametrize(
+        "shots, postselect_mode, error",
+        [
+            (10, "fill-shots", True),
+            (None, "fill-shots", False),
+            (10, "hw-like", False),
+            (None, "hw-like", False),
+        ],
+    )
+    def test_defer_measurements_fill_shots_zero_prob_postselection_error(
+        self, shots, postselect_mode, error, interface, use_jit
+    ):
+        """Test that an error is raised if `postselect_mode="fill-shots"` with finite shots
+        and the postselection probability is zero when using defer_measurements."""
+        if use_jit and interface != "jax":
+            pytest.skip("Can't jit with non-jax interfaces.")
+
+        dev = DefaultQubit()
+
+        @qml.qnode(
+            dev,
+            shots=shots,
+            interface=interface,
+            mcm_method="deferred",
+            postselect_mode=postselect_mode,
+        )
+        def circuit(x):
+            # Applying a parametrized gate to make the state abstract with jax.jit
+            qml.RZ(x, 0)
+            # State is g * |0> for some global phase g (because we applied an RZ gate),
+            # so postselection probability is zero
+            qml.measure(0, postselect=1)
+            return qml.expval(qml.Z(0))
+
+        if use_jit:
+            if postselect_mode == "hw-like":
+                pytest.xfail(
+                    reason="defer measurements + hw-like does not work with JAX jit yet. See sc-96593 or #7981."
+                )
+
+            # pylint: disable=import-outside-toplevel
+            import jax
+
+            # We do not raise an error if using jax.jit, because we cannot check whether or not
+            # the probability is zero. But, this is only the case with analytic execution because
+            # with shots, we perform the execution in a pure callback, so the state is concrete.
+            error = error if shots else False
+            circuit = jax.jit(circuit)
+
+            # When jitting, we go through JAX's error handling, so the expected error is not the same
+            # as without jitting
+            expected_error = Exception
+            err_message = ""
+
+        else:
+            expected_error = RuntimeError
+            err_message = "The probability of the postselected"
+
+        if error:
+            with pytest.raises(expected_error, match=err_message):
+                circuit(0.0)
+
+        else:
+            # no error
+            circuit(0.0)
 
 
 class TestIntegration:

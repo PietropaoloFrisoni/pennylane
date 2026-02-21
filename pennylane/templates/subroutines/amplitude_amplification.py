@@ -87,7 +87,7 @@ class AmplitudeAmplification(Operation):
     Amplification of state :math:`|2\rangle` using Grover's algorithm with 3 qubits.
     The state :math:`|\Psi\rangle` is constructed as a uniform superposition of basis states.
 
-    .. code-block::
+    .. code-block:: python
 
         @qml.prod
         def generator(wires):
@@ -107,10 +107,8 @@ class AmplitudeAmplification(Operation):
 
             return qml.probs(wires=range(3))
 
-    .. code-block:: pycon
-
-        >>> print(np.round(circuit(),3))
-        [0.013, 0.013, 0.91, 0.013, 0.013, 0.013, 0.013, 0.013]
+    >>> print(np.round(circuit(),3))
+    [0.013 0.013 0.91  0.013 0.013 0.013 0.013 0.013]
     """
 
     grad_method = None
@@ -183,16 +181,16 @@ class AmplitudeAmplification(Operation):
         if fixed_point:
             alphas, betas = _get_fixed_point_angles(iters, p_min)
 
-            for iter in range(iters // 2):
+            for it in range(iters // 2):
                 ops.append(Hadamard(wires=work_wire))
                 ops.append(ctrl(O, control=work_wire))
                 ops.append(Hadamard(wires=work_wire))
-                ops.append(PhaseShift(betas[iter], wires=work_wire))
+                ops.append(PhaseShift(betas[it], wires=work_wire))
                 ops.append(Hadamard(wires=work_wire))
                 ops.append(ctrl(O, control=work_wire))
                 ops.append(Hadamard(wires=work_wire))
 
-                ops.append(Reflection(U, -alphas[iter], reflection_wires=reflection_wires))
+                ops.append(Reflection(U, -alphas[it], reflection_wires=reflection_wires))
         else:
             for _ in range(iters):
                 ops.append(O)
@@ -273,25 +271,25 @@ def _amplitude_amplification_decomposition(
 
     if fixed_point:
 
-        def alpha(iter):
+        def alpha(it):
             return np.real(
-                2 * np.arctan(1 / (np.tan(2 * np.pi * (iter + 1) / iters) * np.sqrt(1 - gamma**2)))
+                2 * np.arctan(1 / (np.tan(2 * np.pi * it / iters) * np.sqrt(1 - gamma**2)))
             )
 
-        def beta(iter):
-            return -alpha(-(iter + 1))
+        def beta(it):
+            return -alpha(iters // 2 + 1 - it)
 
-        @for_loop(iters // 2)
-        def half_iter_loop(iter):
+        @for_loop(1, iters // 2 + 1)
+        def half_iter_loop(it):
             Hadamard(wires=work_wire)
             ctrl(O, control=work_wire)
             Hadamard(wires=work_wire)
-            PhaseShift(beta(iter), wires=work_wire)
+            PhaseShift(beta(it), wires=work_wire)
             Hadamard(wires=work_wire)
             ctrl(O, control=work_wire)
             Hadamard(wires=work_wire)
 
-            Reflection(U, -alpha(iter), reflection_wires=reflection_wires)
+            Reflection(U, -alpha(it), reflection_wires=reflection_wires)
 
         half_iter_loop()  # pylint: disable=no-value-for-parameter
     else:

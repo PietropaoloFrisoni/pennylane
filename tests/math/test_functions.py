@@ -867,11 +867,11 @@ class TestTensordotDifferentiability:
         v2 = np.array(self.v2, requires_grad=True)
 
         # Test inner product
-        jac = qml.jacobian(partial(fn.tensordot, axes=[0, 0]), argnum=(0, 1))(v0, v1)
+        jac = qml.jacobian(partial(fn.tensordot, axes=[0, 0]), argnums=(0, 1))(v0, v1)
         assert all(fn.allclose(jac[i], _v) for i, _v in enumerate([v1, v0]))
 
         # Test outer product
-        jac = qml.jacobian(partial(fn.tensordot, axes=0), argnum=(0, 1))(v0, v2)
+        jac = qml.jacobian(partial(fn.tensordot, axes=0), argnums=(0, 1))(v0, v2)
         assert all(fn.shape(jac[i]) == self.exp_shapes[i] for i in [0, 1])
         assert all(fn.allclose(jac[i], self.exp_jacs[i]) for i in [0, 1])
 
@@ -1063,6 +1063,33 @@ class TestScipySparse:
 # pylint: disable=too-few-public-methods
 class TestInterfaceEnum:
     """Test the Interface enum class"""
+
+    @pytest.mark.parametrize("user_input", [None, "numpy", "scipy"])
+    def test_numpy(self, user_input):
+        """Test that the numpy interface is correctly returned"""
+        assert fn.Interface(user_input) == fn.Interface.NUMPY
+
+    def test_autograd(self):
+        """Test that the autograd interface is correctly returned"""
+        assert fn.Interface("autograd") == fn.Interface.AUTOGRAD
+
+    @pytest.mark.parametrize("user_input", ["torch", "pytorch"])
+    def test_torch(self, user_input):
+        """Test that the torch interface is correctly returned"""
+        assert fn.Interface(user_input) == fn.Interface.TORCH
+
+    @pytest.mark.parametrize("user_input", ["JAX", "jax", "jax-python"])
+    def test_jax(self, user_input):
+        """Test that the jax interface is correctly returned"""
+        assert fn.Interface(user_input) == fn.Interface.JAX
+
+    def test_jax_jit(self):
+        """Test that the jax-jit interface is correctly returned"""
+        assert fn.Interface("jax-jit") == fn.Interface.JAX_JIT
+
+    def test_auto(self):
+        """Test that the auto interface is correctly returned"""
+        assert fn.Interface("auto") == fn.Interface.AUTO
 
     def test_eq(self):
         """Test that an error is raised if comparing to string"""
@@ -2280,7 +2307,7 @@ class TestUnwrap:
             np.tensor(0.1, dtype=np.float64, requires_grad=True),
             np.tensor([0.5, 0.2], requires_grad=True),
         ]
-        _ = qml.grad(cost_fn, argnum=[1, 2])(*values)
+        _ = qml.grad(cost_fn, argnums=[1, 2])(*values)
 
         expected = [np.array([0.1, 0.2]), 0.1, np.array([0.5, 0.2])]
         assert all(np.allclose(a, b) for a, b in zip(unwrapped_params, expected))

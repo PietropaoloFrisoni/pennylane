@@ -34,6 +34,14 @@ The following frameworks are currently supported:
 """
 import autoray as ar
 
+from .binary_linalg import (
+    binary_finite_reduced_row_echelon,
+    binary_is_independent,
+    binary_matrix_rank,
+    binary_select_basis,
+    binary_solve_linear_system,
+    int_to_binary,
+)
 from .is_independent import is_independent
 from .matrix_manipulation import (
     expand_matrix,
@@ -98,20 +106,17 @@ from .utils import (
     allequal,
     cast,
     cast_like,
+    ceil_log2,
     convert_like,
     in_backprop,
-    requires_grad,
     is_abstract,
-    binary_finite_reduced_row_echelon,
+    requires_grad,
 )
 from .interface_utils import (
-    get_canonical_interface_name,
-    SupportedInterfaceUserInput,
     SUPPORTED_INTERFACE_NAMES,
     get_deep_interface,
     get_interface,
     Interface,
-    InterfaceLike,
 )
 from .grad import grad, jacobian
 from . import decomposition
@@ -203,9 +208,15 @@ __all__ = [
     "allclose",
     "allequal",
     "array",
+    "binary_finite_reduced_row_echelon",
+    "binary_is_independent",
+    "binary_matrix_rank",
+    "binary_select_basis",
+    "binary_solve_linear_system",
     "block_diag",
     "cast",
     "cast_like",
+    "ceil_log2",
     "concatenate",
     "convert_like",
     "convert_to_su2",
@@ -228,10 +239,10 @@ __all__ = [
     "get_dtype_name",
     "get_interface",
     "get_batch_size",
-    "get_canonical_interface_name",
     "get_deep_interface",
     "get_trainable_indices",
     "grad",
+    "int_to_binary",
     "in_backprop",
     "is_abstract",
     "is_independent",
@@ -253,7 +264,6 @@ __all__ = [
     "reduce_dm",
     "reduce_matrices",
     "reduce_statevector",
-    "binary_finite_reduced_row_echelon",
     "relative_entropy",
     "requires_grad",
     "scatter",

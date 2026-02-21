@@ -15,11 +15,13 @@
 Unit tests for the equal function.
 Tests are divided by number of parameters and wires different operators take.
 """
+
 import itertools
 import re
 
 # pylint: disable=too-many-arguments, too-many-public-methods
 from copy import deepcopy
+from functools import partial
 
 import numpy as np
 import pytest
@@ -29,7 +31,7 @@ from pennylane import numpy as npp
 from pennylane.measurements import ExpectationMP
 from pennylane.measurements.probs import ProbabilityMP
 from pennylane.operation import Operator
-from pennylane.ops import Conditional
+from pennylane.ops import Conditional, PauliMeasure
 from pennylane.ops.functions.equal import (
     BASE_OPERATION_MISMATCH_ERROR_MESSAGE,
     OPERANDS_MISMATCH_ERROR_MESSAGE,
@@ -38,6 +40,7 @@ from pennylane.ops.functions.equal import (
 )
 from pennylane.ops.op_math import Controlled, SymbolicOp
 from pennylane.templates.subroutines import ControlledSequence
+from pennylane.wires import Wires
 
 PARAMETRIZED_OPERATIONS_1P_1W = [
     qml.RX,
@@ -267,7 +270,6 @@ def test_assert_equal_types():
 
 
 def test_assert_equal_unspecified():
-
     # pylint: disable=too-few-public-methods
     class RandomType:
         """dummy type"""
@@ -286,7 +288,6 @@ def test_assert_equal_unspecified():
 
 
 class TestEqual:
-
     def test_identity_equal(self):
         """Test that comparing two Identities always returns True regardless of wires"""
         I1 = qml.Identity()
@@ -1660,15 +1661,13 @@ class TestMeasurementsEqual:
         assert qml.equal(qml.expval(o1), qml.expval(o2)) is True
 
     def test_mid_measure(self):
-        """Test that `MidMeasureMP`s are equal only if their wires
+        """Test that `MidMeasure`s are equal only if their wires
         an id are equal and their `reset` attribute match."""
-        mp = qml.measurements.MidMeasureMP(wires=qml.wires.Wires([0, 1]), reset=True, id="test_id")
+        mp = qml.ops.MidMeasure(wires=Wires([0]), reset=True, id="test_id")
 
-        mp1 = qml.measurements.MidMeasureMP(wires=qml.wires.Wires([1, 0]), reset=True, id="test_id")
-        mp2 = qml.measurements.MidMeasureMP(
-            wires=qml.wires.Wires([0, 1]), reset=False, id="test_id"
-        )
-        mp3 = qml.measurements.MidMeasureMP(wires=qml.wires.Wires([0, 1]), reset=True, id="foo")
+        mp1 = qml.ops.MidMeasure(wires=Wires([1]), reset=True, id="test_id")
+        mp2 = qml.ops.MidMeasure(wires=Wires([0]), reset=False, id="test_id")
+        mp3 = qml.ops.MidMeasure(wires=Wires([0]), reset=True, id="foo")
 
         assert qml.equal(mp, mp1) is False
         assert qml.equal(mp, mp2) is False
@@ -1677,19 +1676,33 @@ class TestMeasurementsEqual:
         assert (
             qml.equal(
                 mp,
-                qml.measurements.MidMeasureMP(
-                    wires=qml.wires.Wires([0, 1]), reset=True, id="test_id"
-                ),
+                qml.ops.MidMeasure(wires=Wires([0]), reset=True, id="test_id"),
             )
             is True
         )
+
+    def test_pauli_measure(self):
+        """Test the equal check of pauli measures."""
+
+        mp = PauliMeasure("XY", wires=Wires([0, 1]), id="test_id")
+
+        mp1 = PauliMeasure("XZ", wires=Wires([0, 1]), id="test_id")
+        mp2 = PauliMeasure("XY", wires=Wires([1, 2]), id="test_id")
+        mp3 = PauliMeasure("XY", wires=Wires([0, 1]), id="foo")
+        mp4 = PauliMeasure("XY", wires=Wires([0, 1]), postselect=1, id="test_id")
+
+        assert qml.equal(mp, mp1) is False
+        assert qml.equal(mp, mp2) is False
+        assert qml.equal(mp, mp3) is False
+        assert qml.equal(mp, mp4) is False
+        assert qml.equal(mp, PauliMeasure("XY", wires=Wires([0, 1]), id="test_id")) is True
 
     def test_equal_measurement_value(self):
         """Test that MeasurementValue's are equal when their measurements are the same."""
         mv1 = qml.measure(0)
         mv2 = qml.measure(0)
-        # qml.equal of MidMeasureMP checks the id
-        mv2.measurements[0].id = mv1.measurements[0].id
+        # qml.equal of MidMeasure checks the id
+        mv2.measurements[0]._id = mv1.measurements[0].id  # pylint: disable=protected-access
 
         assert qml.equal(mv1, mv1) is True
         assert qml.equal(mv1, mv2) is True
@@ -1705,8 +1718,8 @@ class TestMeasurementsEqual:
         mv1 = qml.measure(0)
         mv2 = qml.measure(1)
         mv3 = qml.measure(0)
-        # qml.equal of MidMeasureMP checks the id
-        mv3.measurements[0].id = mv1.measurements[0].id
+        # qml.equal of MidMeasure checks the id
+        mv3.measurements[0]._id = mv1.measurements[0].id  # pylint: disable=protected-access
 
         assert qml.equal(mv1 * mv2, mv2 * mv1) is True
         assert qml.equal(mv1 + mv2, mv3 + mv2) is True
@@ -1721,7 +1734,7 @@ class TestMeasurementsEqual:
         mv2 = qml.measure(1)
         mv3 = qml.measure(1)
         mv4 = qml.measure(0)
-        mv4.measurements[0].id = mv1.measurements[0].id
+        mv4.measurements[0]._id = mv1.measurements[0].id  # pylint: disable=protected-access
 
         mp1 = mp_fn(op=[mv1, mv2])
         mp2 = mp_fn(op=[mv4, mv2])
@@ -1751,7 +1764,7 @@ class TestMeasurementsEqual:
         mv2 = qml.measure(1)
         mv3 = qml.measure(1)
         mv4 = qml.measure(0)
-        mv4.measurements[0].id = mv1.measurements[0].id
+        mv4.measurements[0]._id = mv1.measurements[0].id  # pylint: disable=protected-access
 
         mp1 = mp_fn(op=mv1 * mv2)
         mp2 = mp_fn(op=mv4 * mv2)
@@ -2015,18 +2028,28 @@ class TestSymbolicOpComparison:
                 assert_equal(op1, op2)
 
     @pytest.mark.parametrize(("wire1", "wire2", "res"), WIRES)
-    def test_controlled_work_wires_comparison(self, wire1, wire2, res):
+    @pytest.mark.parametrize(
+        "wwt1, wwt2", [("zeroed", "zeroed"), ("borrowed", "borrowed"), ("borrowed", "zeroed")]
+    )
+    def test_controlled_work_wires_comparison(self, wire1, wire2, res, wwt1, wwt2):
         """Test that equal compares work_wires for Controlled operators"""
         base1 = qml.MultiRZ(1.23, [0, 1])
         base2 = qml.MultiRZ(1.23, [0, 1])
-        op1 = Controlled(base1, control_wires=2, work_wires=wire1)
-        op2 = Controlled(base2, control_wires=2, work_wires=wire2)
+        op1 = Controlled(base1, control_wires=2, work_wires=wire1, work_wire_type=wwt1)
+        op2 = Controlled(base2, control_wires=2, work_wires=wire2, work_wire_type=wwt2)
+        # res is given by the wire parametrization, but is overwritten to False if the work
+        # wire types differ. match is only used if res=False, and is adjusted if res was True
+        match = "op1 and op2 have different work wires."
+        if res and wwt1 != wwt2:
+            match = "op1 and op2 have different work wire types."
+            res = False
+
+        assert qml.equal(op1, op2) is res
+
         if res:
-            assert qml.equal(op1, op2) == res
             assert_equal(op1, op2)
         else:
-            assert qml.equal(op1, op2) is False
-            with pytest.raises(AssertionError, match="op1 and op2 have different work wires."):
+            with pytest.raises(AssertionError, match=match):
                 assert_equal(op1, op2)
 
     def test_controlled_arithmetic_depth(self):
@@ -2092,8 +2115,8 @@ class TestSymbolicOpComparison:
         m1 = qml.measure(wire1)
         m2 = qml.measure(wire2)
         if wire1 == wire2:
-            # qml.equal checks id for MidMeasureMP, but here we only care about them acting on the same wire
-            m2.measurements[0].id = m1.measurements[0].id
+            # qml.equal checks id for MidMeasure, but here we only care about them acting on the same wire
+            m2.measurements[0]._id = m1.measurements[0].id  # pylint: disable=protected-access
         base = qml.PauliX(wire2)
         op1 = Conditional(m1, base)
         op2 = Conditional(m2, base)
@@ -3035,6 +3058,14 @@ def test_ops_with_abstract_parameters_not_equal():
     with pytest.raises(AssertionError, match="Data contains a tracer"):
         jax.jit(assert_equal)(qml.RX(0.1, 0), qml.RX(0.1, 0))
 
+    assert not jax.jit(qml.equal)(qml.exp(qml.X(0), 0.5), qml.exp(qml.X(0), 0.5))
+    with pytest.raises(AssertionError, match="Data contains a tracer"):
+        jax.jit(assert_equal)(qml.exp(qml.X(0), 0.5), qml.exp(qml.X(0), 0.5))
+
+    assert not jax.jit(qml.equal)(qml.X(0) * 0.5, qml.X(0) * 0.5)
+    with pytest.raises(AssertionError, match="Data contains a tracer"):
+        jax.jit(assert_equal)(qml.X(0) * 0.5, qml.X(0) * 0.5)
+
 
 @pytest.mark.parametrize(
     "op, other_op",
@@ -3062,6 +3093,28 @@ def test_not_equal_prep_sel_prep(op, other_op):
     assert qml.equal(op, other_op) is False
 
 
+def test_qsvt():
+    """Test that QSVT operators can be compared."""
+
+    projectors = [qml.PCPhase(0.2, dim=1, wires=0), qml.PCPhase(0.3, dim=1, wires=0)]
+    op1 = qml.QSVT(qml.X(0), projectors)
+    op2 = qml.QSVT(qml.Y(0), projectors)
+    op3 = qml.QSVT(qml.X(0), projectors[:1])
+    op4 = qml.QSVT(qml.X(0), projectors[::-1])
+
+    for op in [op1, op2, op3, op4]:
+        qml.assert_equal(op, op)
+
+    with pytest.raises(AssertionError, match=r"different block encodings"):
+        qml.assert_equal(op1, op2)
+
+    with pytest.raises(AssertionError, match=r"different number of projectors"):
+        qml.assert_equal(op1, op3)
+
+    with pytest.raises(AssertionError, match=r"different projectors at position 0"):
+        qml.assert_equal(op1, op4)
+
+
 def test_select():
     """Test that Select operators can be compared."""
 
@@ -3087,3 +3140,88 @@ def test_select():
     op2 = qml.Select((qml.X(0),), control=2)
     qml.assert_equal(op1, op2)
     assert qml.equal(op1, op2) is True
+
+
+# pylint: disable=unused-argument
+class TestCompareSubroutines:
+
+    def test_different_subroutine_defs(self):
+        """Test SubroutineOp are not equal if their Subroutines are not equal."""
+
+        @qml.templates.Subroutine
+        def Subroutine1(wires):
+            qml.X(wires)
+
+        @qml.templates.Subroutine
+        def Subroutine2(wires):
+            qml.Y(wires)
+
+        op1 = qml.tape.make_qscript(Subroutine1)(0)[0]
+        op2 = qml.tape.make_qscript(Subroutine2)(0)[0]
+
+        assert not qml.equal(op1, op2)
+        with pytest.raises(AssertionError, match="op1 is <Subroutine: Subroutine1>"):
+            qml.assert_equal(op1, op2)
+
+    def test_different_static_args(self):
+        """Test they are different if they have different static args."""
+
+        @partial(qml.templates.Subroutine, static_argnames=("a",))
+        def f(a, wires):
+            pass
+
+        op1 = qml.tape.make_qscript(f)("val1", 0)[0]
+        op2 = qml.tape.make_qscript(f)("val2", 0)[0]
+
+        assert not qml.equal(op1, op2)
+        with pytest.raises(AssertionError, match="op2 has value val2 for input a"):
+            qml.assert_equal(op1, op2)
+
+    def test_different_wires(self):
+        """Test they are different if their wires are different."""
+
+        @partial(qml.templates.Subroutine, wire_argnames=("reg1", "reg2"))
+        def f(reg1, reg2):
+            pass
+
+        op1 = qml.tape.make_qscript(f)((0,), (1,))[0]
+        op2 = qml.tape.make_qscript(f)((1,), (0,))[0]
+        assert not qml.equal(op1, op2)
+        with pytest.raises(AssertionError, match=r"has value Wires\(\[1\]\) for register reg1"):
+            qml.assert_equal(op1, op2)
+
+    def test_different_pytree_inputs(self):
+        """Test that if the pytrees for an input are different, the ops are different."""
+
+        @qml.templates.Subroutine
+        def f(x, wires):
+            pass
+
+        op1 = qml.tape.make_qscript(f)((0.5,), 0)[0]
+        op2 = qml.tape.make_qscript(f)((0.5, 0.6), 0)[0]
+
+        assert not qml.equal(op1, op2)
+        with pytest.raises(AssertionError, match="have different pytree structures"):
+            qml.assert_equal(op1, op2)
+
+    def test_different_data(self):
+        """Test that if there is different data, they are different operators."""
+
+        @qml.templates.Subroutine
+        def f(x, wires):
+            pass
+
+        op1 = qml.tape.make_qscript(f)(np.array(0.5), 0)[0]
+        op2 = qml.tape.make_qscript(f)(np.array(0.5 + 1e-5), 0)[0]
+
+        assert not qml.equal(op1, op2)
+        assert qml.equal(op1, op2, rtol=1e-4)
+        assert qml.equal(op1, op2, atol=1e-4)
+
+        op3 = qml.tape.make_qscript(f)(qml.numpy.array(0.5, requires_grad=False), 0)[0]
+        assert not qml.equal(op1, op3)
+        assert qml.equal(op1, op3, check_interface=False)
+
+        op4 = qml.tape.make_qscript(f)(qml.numpy.array(0.5), 0)[0]
+        assert not qml.equal(op3, op4)
+        assert qml.equal(op3, op4, check_trainability=False)

@@ -21,8 +21,7 @@ import warnings
 from collections.abc import Callable, Sequence
 from copy import copy
 
-import pennylane as qml
-from pennylane.decomposition.decomposition_graph import DecompGraphSolution
+from pennylane.decomposition import enabled_graph
 from pennylane.exceptions import (
     AllocationError,
     DecompositionUndefinedError,
@@ -30,18 +29,27 @@ from pennylane.exceptions import (
     QuantumFunctionError,
     WireError,
 )
-from pennylane.math import requires_grad
-from pennylane.measurements import SampleMeasurement, StateMeasurement
+from pennylane.math import is_abstract, requires_grad
+from pennylane.measurements import (
+    SampleMeasurement,
+    StateMeasurement,
+    counts,
+    sample,
+)
 from pennylane.operation import Operator, StatePrepBase
 from pennylane.ops import Snapshot
 from pennylane.tape import QuantumScript, QuantumScriptBatch
-from pennylane.transforms import resolve_dynamic_wires
+from pennylane.transforms import (
+    diagonalize_measurements,
+    resolve_dynamic_wires,
+)
 from pennylane.transforms.core import transform
-from pennylane.transforms.decompose import _operator_decomposition_gen
+from pennylane.transforms.decompose import (
+    _construct_and_solve_decomp_graph,
+    _operator_decomposition_gen,
+)
 from pennylane.typing import PostprocessingFn
 from pennylane.wires import Wires
-
-from .execution_config import MCMConfig
 
 
 def null_postprocessing(results):
@@ -122,7 +130,7 @@ def validate_device_wires(
         WireError: if the tape has a wire not present in the provided wires, or if abstract wires are present.
     """
 
-    if any(qml.math.is_abstract(w) for w in tape.wires):
+    if any(is_abstract(w) for w in tape.wires):
         raise WireError(
             f"Cannot run circuit(s) on {name} as abstract wires are present in the tape: {tape.wires}. "
             f"Abstract wires are not yet supported."
@@ -131,7 +139,7 @@ def validate_device_wires(
     if not wires:
         return (tape,), null_postprocessing
 
-    if any(qml.math.is_abstract(w) for w in wires):
+    if any(is_abstract(w) for w in wires):
         raise WireError(
             f"Cannot run circuit(s) on {name} as abstract wires are present in the device: {wires}. "
             f"Abstract wires are not yet supported."
@@ -146,7 +154,7 @@ def validate_device_wires(
     modified = False
     new_ops = None
     for i, op in enumerate(tape.operations):
-        if isinstance(op, qml.Snapshot):
+        if isinstance(op, Snapshot):
             mp = op.hyperparameters["measurement"]
             if not mp.wires:
                 if not new_ops:
@@ -154,7 +162,7 @@ def validate_device_wires(
                 modified = True
                 new_mp = copy(mp)
                 new_mp._wires = wires  # pylint:disable=protected-access
-                new_ops[i] = qml.Snapshot(
+                new_ops[i] = Snapshot(
                     measurement=new_mp, tag=op.tag, shots=op.hyperparameters["shots"]
                 )
     if not new_ops:
@@ -171,34 +179,6 @@ def validate_device_wires(
         tape = tape.copy(ops=new_ops, measurements=measurements)
 
     return (tape,), null_postprocessing
-
-
-@transform
-def mid_circuit_measurements(
-    tape: QuantumScript,
-    device,
-    mcm_config=MCMConfig(),
-    **kwargs,  # pylint: disable=unused-argument
-) -> tuple[QuantumScriptBatch, PostprocessingFn]:
-    """Provide the transform to handle mid-circuit measurements.
-
-    In the case where no method is specified, if the tape or device
-    uses finite-shot, the ``qml.dynamic_one_shot`` transform will be
-    applied, otherwise ``qml.defer_measurements`` is used instead.
-    """
-    if isinstance(mcm_config, dict):
-        mcm_config = MCMConfig(**mcm_config)
-    mcm_method = mcm_config.mcm_method
-    if mcm_method is None:
-        mcm_method = "one-shot" if tape.shots else "deferred"
-
-    if mcm_method == "one-shot":
-        return qml.dynamic_one_shot(tape, postselect_mode=mcm_config.postselect_mode)
-    if mcm_method in ("tree-traversal", "device"):
-        return (tape,), null_postprocessing
-    return qml.defer_measurements(
-        tape, allow_postselect=isinstance(device, qml.devices.DefaultQubit)
-    )
 
 
 @transform
@@ -294,10 +274,11 @@ def decompose(  # pylint: disable = too-many-positional-arguments
     stopping_condition_shots: Callable[[Operator], bool] | None = None,
     skip_initial_state_prep: bool = True,
     decomposer: Callable[[Operator], Sequence[Operator]] | None = None,
-    graph_solution: DecompGraphSolution | None = None,
-    num_available_work_wires: int | None = 0,
+    device_wires: Wires | None = None,
+    target_gates: set | None = None,
     name: str = "device",
     error: type[Exception] | None = None,
+    strict: bool = True,
 ) -> tuple[QuantumScriptBatch, PostprocessingFn]:
     """Decompose operations until the stopping condition is met.
 
@@ -317,10 +298,16 @@ def decompose(  # pylint: disable = too-many-positional-arguments
         decomposer (Callable): an optional callable that takes an operator and implements the
             relevant decomposition. If ``None``, defaults to using a callable returning
             ``op.decomposition()`` for any :class:`~.Operator` .
+        device_wires (Wires): The device wires. If provided along with ``target_gates``, will be
+            used to automatically set up graph decomposition when enabled.
+        target_gates (set): The target gate set for graph decomposition. If provided along with
+            ``device_wires``, will automatically enable graph-based decomposition when available.
         name (str): The name of the transform, process or device using decompose. Used in the
             error message. Defaults to "device".
         error (type): An error type to raise if it is not possible to obtain a decomposition that
             fulfills the ``stopping_condition``. Defaults to ``DeviceError``.
+        strict (bool): If ``False``, operators that do not define a decomposition will be treated
+            as supported. Defaults to ``True``
 
     Returns:
         qnode (QNode) or quantum function (Callable) or tuple[List[QuantumScript], function]:
@@ -377,6 +364,29 @@ def decompose(  # pylint: disable = too-many-positional-arguments
     if stopping_condition_shots is not None and tape.shots:
         stopping_condition = stopping_condition_shots
 
+    # Compute parameters for graph decomposition if device_wires and target_gates are provided
+    if device_wires is None:
+        num_available_work_wires = device_wires  # no constraint on work wires
+    else:
+        # Calculate work wires as device wires that are not used by the tape
+        num_available_work_wires = len(set(device_wires) - set(tape.wires))
+
+    graph_solution = None
+    if target_gates is not None and enabled_graph():
+        # Filter out instances of ops that don't need to be decomposed
+        decomposable_ops = [op for op in tape.operations if not stopping_condition(op)]
+
+        # Construct and solve the decomposition graph
+        graph_solution = _construct_and_solve_decomp_graph(
+            operations=decomposable_ops,
+            target_gates=target_gates,
+            num_work_wires=num_available_work_wires,
+            minimize_work_wires=False,
+            fixed_decomps=None,
+            alt_decomps=None,
+            strict=strict,
+        )
+
     if tape.operations and isinstance(tape[0], StatePrepBase) and skip_initial_state_prep:
         prep_op = [tape[0]]
     else:
@@ -392,7 +402,7 @@ def decompose(  # pylint: disable = too-many-positional-arguments
             for final_op in _operator_decomposition_gen(
                 op,
                 stopping_condition,
-                num_available_work_wires=num_available_work_wires,
+                num_work_wires=num_available_work_wires,
                 graph_solution=graph_solution,
                 custom_decomposer=decomposer,
                 strict=True,
@@ -519,7 +529,7 @@ def validate_measurements(
 
 def _validate_snapshot_shots(tape, sample_measurements, analytic_measurements, name):
     for op in tape.operations:
-        if isinstance(op, qml.Snapshot):
+        if isinstance(op, Snapshot):
             shots = (
                 tape.shots
                 if op.hyperparameters["shots"] == "workflow"
@@ -608,7 +618,7 @@ def measurements_from_samples(tape):
             )
 
     diagonalized_tape, measured_wires = _get_diagonalized_tape_and_wires(tape)
-    new_tape = diagonalized_tape.copy(measurements=[qml.sample(wires=measured_wires)])
+    new_tape = diagonalized_tape.copy(measurements=[sample(wires=measured_wires)])
 
     def postprocessing_fn(results):
         """A processing function to get measurement values from samples."""
@@ -698,22 +708,22 @@ def measurements_from_counts(tape):
             )
 
     diagonalized_tape, measured_wires = _get_diagonalized_tape_and_wires(tape)
-    new_tape = diagonalized_tape.copy(measurements=[qml.counts(wires=measured_wires)])
+    new_tape = diagonalized_tape.copy(measurements=[counts(wires=measured_wires)])
 
     def postprocessing_fn(results):
         """A processing function to get measurement values from counts."""
-        counts = results[0]
+        counts_res = results[0]
 
         if tape.shots.has_partitioned_shots:
             results_processed = []
-            for c in counts:
+            for c in counts_res:
                 res = [m.process_counts(c, measured_wires) for m in tape.measurements]
                 if len(tape.measurements) == 1:
                     res = res[0]
                 results_processed.append(res)
         else:
             results_processed = [
-                m.process_counts(counts, measured_wires) for m in tape.measurements
+                m.process_counts(counts_res, measured_wires) for m in tape.measurements
             ]
             if len(tape.measurements) == 1:
                 results_processed = results_processed[0]
@@ -727,7 +737,7 @@ def _get_diagonalized_tape_and_wires(tape):
     """Apply the diagonalize_measurements transform to the tape and extract a list of
     all the wires present in the measurements"""
 
-    (diagonalized_tape,), _ = qml.transforms.diagonalize_measurements(tape)
+    (diagonalized_tape,), _ = diagonalize_measurements(tape)
 
     measured_wires = set()
     for m in diagonalized_tape.measurements:
@@ -741,7 +751,7 @@ def _get_diagonalized_tape_and_wires(tape):
 
 @transform
 def device_resolve_dynamic_wires(
-    tape: QuantumScript, wires: None | Wires
+    tape: QuantumScript, wires: None | Wires, allow_resets: bool = True
 ) -> tuple[QuantumScriptBatch, PostprocessingFn]:
     """Allocate dynamic wires in a manner consistent with the provided device wires.
 
@@ -784,7 +794,9 @@ def device_resolve_dynamic_wires(
         zeroed = ()
         min_int = max((i for i in tape.wires if isinstance(i, int)), default=-1) + 1
     try:
-        return resolve_dynamic_wires(tape, zeroed=zeroed, min_int=min_int)
+        return resolve_dynamic_wires(
+            tape, zeroed=zeroed, min_int=min_int, allow_resets=allow_resets
+        )
     except AllocationError as e:
         raise AllocationError(
             f"Not enough available wires on device with wires {wires} for requested dynamic wires."

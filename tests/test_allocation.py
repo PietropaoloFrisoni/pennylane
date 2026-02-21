@@ -72,6 +72,7 @@ class TestDynamicWire:
 
 class TestAllocateOp:
 
+    @pytest.mark.jax
     def test_valid_operation(self):
         """Test that Allocate is a valid Operator."""
         op = Allocate.from_num_wires(3)
@@ -303,16 +304,29 @@ class TestCaptureIntegration:
         with pytest.raises(NotImplementedError):
             deallocate(2)
 
+    def test_no_dynamic_allocation_size(self):
+        """Test that allocation size must be static with capture."""
+
+        @qml.qnode(qml.device("default.qubit", wires=2))
+        def c(n: int):
+            allocate(n)
+
+        with pytest.raises(
+            NotImplementedError,
+            match="Number of allocated wires must be static when capture is enabled.",
+        ):
+            c(1)
+
 
 @pytest.mark.integration
 class TestDeviceIntegration:
 
     @pytest.mark.parametrize("dev_name", ("default.qubit",))
     @pytest.mark.parametrize("device_wires", (None, (0, 1, 2)))
-    def test_reuse_without_mcms(self, dev_name, device_wires):
+    def test_reuse_without_mcms(self, dev_name, device_wires, seed):
         """Test that a dynamic allocations that do not require mcms can be executed."""
 
-        @qml.qnode(qml.device(dev_name, wires=device_wires))
+        @qml.qnode(qml.device(dev_name, wires=device_wires, seed=seed))
         def c():
             with allocate(1, restored=True) as wires:
                 qml.H(wires)
@@ -331,11 +345,11 @@ class TestDeviceIntegration:
     @pytest.mark.parametrize("dev_name", ("default.qubit",))
     @pytest.mark.parametrize("device_wires", (None, (0, 1, 2, 3)))
     @pytest.mark.parametrize("mcm_method", ("tree-traversal", "deferred", "one-shot"))
-    def test_reuse_with_mcms(self, dev_name, device_wires, mcm_method):
+    def test_reuse_with_mcms(self, dev_name, device_wires, mcm_method, seed):
         """Test that a simple dynamic allocation can be executed."""
 
         @qml.set_shots(5000 if mcm_method == "one-shot" else None)
-        @qml.qnode(qml.device(dev_name, wires=device_wires), mcm_method=mcm_method)
+        @qml.qnode(qml.device(dev_name, wires=device_wires, seed=seed), mcm_method=mcm_method)
         def c():
             with allocate(1, restored=False) as wires:
                 qml.H(wires)

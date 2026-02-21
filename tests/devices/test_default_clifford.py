@@ -14,7 +14,6 @@
 """
 This module contains the tests for the clifford simulator based on stim
 """
-import os
 
 import numpy as np
 import pytest
@@ -23,7 +22,7 @@ from dummy_debugger import Debugger
 
 import pennylane as qml
 from pennylane.devices.default_clifford import _pl_op_to_stim
-from pennylane.exceptions import DeviceError, QuantumFunctionError
+from pennylane.exceptions import DecompositionWarning, DeviceError, QuantumFunctionError
 
 stim = pytest.importorskip("stim")
 
@@ -479,11 +478,10 @@ def test_snapshot_supported(measurement, tag):
         assert qml.math.allclose(snaps_qubit[key1], snaps_clifford[key2])
 
 
-def test_max_worker_clifford():
+def test_max_worker_clifford(monkeypatch):
     """Test that the execution of multiple tapes is possible with multiprocessing on this device."""
 
-    os.environ["OMP_NUM_THREADS"] = "4"
-
+    monkeypatch.setenv("OMP_NUM_THREADS", "4")
     dev_c = qml.device("default.clifford", max_workers=2)
     dev_q = qml.device("default.qubit", max_workers=2)
 
@@ -529,11 +527,11 @@ def test_tracker():
         "results": 0.0,
     }
     assert np.allclose(tracker.history.pop("results")[0], 0.0)
-    assert tracker.history.pop("resources")[0] == qml.resource.Resources(
-        num_wires=2,
-        num_gates=2,
+    assert tracker.history.pop("resources")[0] == qml.resource.SpecsResources(
+        num_allocs=2,
         gate_types={"Hadamard": 1, "CNOT": 1},
         gate_sizes={1: 1, 2: 1},
+        measurements={"expval(PauliZ)": 1},
         depth=2,
     )
     assert tracker.history == {
@@ -670,7 +668,11 @@ def test_clifford_error(check):
         DeviceError,
         match=r"Operator RX\(1.0, wires=\[0\]\) not supported with default.clifford and does not provide a decomposition",
     ):
-        circuit()
+        if qml.decomposition.enabled_graph() and check:
+            with pytest.warns(DecompositionWarning):
+                circuit()
+        else:
+            circuit()
 
 
 def test_meas_error_noisy():

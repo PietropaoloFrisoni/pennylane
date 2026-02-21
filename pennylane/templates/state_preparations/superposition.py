@@ -49,26 +49,22 @@ def order_states(basis_states: list[list[int]]) -> dict[tuple[int], tuple[int]]:
     state of length :math:`4` will be mapped as
     :math:`\{s_0: |0000\rangle, s_1: |0001\rangle, s_2: |0010\rangle, \dots\}`.
 
-    .. code-block:: pycon
-
-        >>> basis_states = [[1, 1, 0, 0], [1, 0, 1, 0], [0, 1, 0, 1], [1, 0, 0, 1]]
-        >>> order_states(basis_states)
-        {(1, 1, 0, 0): (0, 0, 0, 0),
-         (1, 0, 1, 0): (0, 0, 0, 1),
-         (0, 1, 0, 1): (0, 0, 1, 0),
-         (1, 0, 0, 1): (0, 0, 1, 1)}
+    >>> basis_states = [[1, 1, 0, 0], [1, 0, 1, 0], [0, 1, 0, 1], [1, 0, 0, 1]]
+    >>> order_states(basis_states)
+    {(1, 1, 0, 0): (0, 0, 0, 0),
+        (1, 0, 1, 0): (0, 0, 0, 1),
+        (0, 1, 0, 1): (0, 0, 1, 0),
+        (1, 0, 0, 1): (0, 0, 1, 1)}
 
     If a state in ``basis_states`` is one of the first :math:`m` basis states,
     this state will be mapped to itself, i.e. it will be a fixed point of the mapping.
 
-    .. code-block:: pycon
-
-        >>> basis_states = [[1, 1, 0, 0], [0, 1, 0, 1], [0, 0, 0, 1], [1, 0, 0, 1]]
-        >>> order_states(basis_states)
-        {(0, 0, 0, 1): (0, 0, 0, 1),
-         (1, 1, 0, 0): (0, 0, 0, 0),
-         (0, 1, 0, 1): (0, 0, 1, 0),
-         (1, 0, 0, 1): (0, 0, 1, 1)}
+    >>> basis_states = [[1, 1, 0, 0], [0, 1, 0, 1], [0, 0, 0, 1], [1, 0, 0, 1]]
+    >>> order_states(basis_states)
+    {(0, 0, 0, 1): (0, 0, 0, 1),
+        (1, 1, 0, 0): (0, 0, 0, 0),
+        (0, 1, 0, 1): (0, 0, 1, 0),
+        (1, 0, 0, 1): (0, 0, 1, 1)}
 
     """
 
@@ -171,7 +167,7 @@ class Superposition(Operation):
 
     **Example**
 
-    .. code-block::
+    .. code-block:: python
 
         import pennylane as qml
         import numpy as np
@@ -187,11 +183,8 @@ class Superposition(Operation):
             qml.Superposition(coeffs, bases, wires, work_wire)
             return qml.probs(wires)
 
-    .. code-block:: pycon
-
-        >>> print(circuit())
-        [0.33333333 0.         0.33333333 0.         0.         0.
-        0.         0.33333333]
+    >>> print(circuit()) # doctest: +SKIP
+    [0.3333 0.     0.3333 0.     0.     0.     0.     0.3333]
 
 
     .. details::
@@ -324,13 +317,13 @@ class Superposition(Operation):
 
         **Example**
 
-        .. code-block:: pycon
-
-            >>> qml.Superposition(np.sqrt([1/2, 1/2]), [[1, 1], [0, 0]], [0, 1], 2).decomposition()
-            [StatePrep(array([0.70710678, 0.70710678]), wires=[1]),
-            MultiControlledX(wires=[0, 1, 2], control_values=[False, True]),
-            CNOT(wires=[2, 0]),
-            Toffoli(wires=[0, 1, 2])]
+        >>> ops = qml.Superposition(np.sqrt([1/2, 1/2]), [[1, 1], [0, 0]], [0, 1], 2).decomposition()
+        >>> from pprint import pprint
+        >>> pprint(ops)
+        [StatePrep(array([0.707..., 0.707...]), wires=[1]),
+        MultiControlledX(wires=[0, 1, 2], control_values=[False, True]),
+        CNOT(wires=[2, 0]),
+        Toffoli(wires=[0, 1, 2])]
 
         """
 
@@ -349,7 +342,7 @@ class Superposition(Operation):
         op_list.append(
             qml.StatePrep(
                 qml.math.stack(sorted_coefficients),
-                wires=wires[-int(qml.math.ceil(qml.math.log2(len(coeffs)))) :],
+                wires=wires[-qml.math.ceil_log2(len(coeffs)) :],
                 pad_with=0,
             )
         )
@@ -389,14 +382,12 @@ class Superposition(Operation):
         )
 
 
-def _suerposition_resources(num_wires, num_coeffs, bases):
+def _superposition_resources(num_wires, num_coeffs, bases):
     perms = order_states(bases)
 
     resources = Counter()
 
-    resources[
-        resource_rep(qml.StatePrep, num_wires=int(qml.math.ceil(qml.math.log2(num_coeffs))))
-    ] += 1
+    resources[resource_rep(qml.StatePrep, num_wires=qml.math.ceil_log2(num_coeffs))] += 1
 
     for basis2, basis1 in perms.items():
         if not qml.math.allclose(basis1, basis2):
@@ -428,8 +419,10 @@ def _suerposition_resources(num_wires, num_coeffs, bases):
     return dict(resources)
 
 
-@register_resources(_suerposition_resources)
-def _superposition_decomposition(coeffs, bases, target_wires, work_wire, wires=None):
+@register_resources(_superposition_resources)
+def _superposition_decomposition(
+    coeffs, bases, wires, target_wires, work_wire  # pylint: disable=unused-argument
+):
     dic_state = dict(zip(bases, coeffs))
     perms = order_states(bases)
     new_dic_state = {perms[key]: dic_state[key] for key in dic_state if key in perms}
@@ -443,11 +436,11 @@ def _superposition_decomposition(coeffs, bases, target_wires, work_wire, wires=N
 
     qml.StatePrep(
         qml.math.stack(sorted_coefficients),
-        wires=wires[-int(qml.math.ceil(qml.math.log2(len(coeffs)))) :],
+        wires=target_wires[-qml.math.ceil_log2(len(coeffs)) :],
         pad_with=0,
     )
 
-    bas = [(b2, b1) for b1, b2 in perms.items()]
+    bas = list(perms.items())
 
     @for_loop(len(list(perms.keys())))
     def apply_permutations(i):

@@ -21,6 +21,7 @@ import sys
 
 import numpy as np
 import pytest
+from packaging.version import Version
 
 import pennylane as qml
 from pennylane.devices import DefaultGaussian
@@ -172,9 +173,21 @@ def enable_disable_plxpr():
 
 @pytest.fixture(scope="function")
 def enable_disable_dynamic_shapes():
+    """Enable dynamic shapes and apply JAX patches for the duration of a test.
+
+    JAX 0.7.x requires patches to fix AssertionError in trace.frame.add_eqn
+    when using dynamic shapes. See pennylane/capture/jax_patches.py for details.
+    """
     jax.config.update("jax_dynamic_shapes", True)
     try:
-        yield
+        if Version(jax.__version__) >= Version("0.7.0"):
+            from pennylane.capture.jax_patches import get_jax_patches
+            from pennylane.capture.patching import Patcher
+
+            # Apply patches using Patcher context manager for this test
+            patches = get_jax_patches()
+            with Patcher(*patches):
+                yield
     finally:
         jax.config.update("jax_dynamic_shapes", False)
 
@@ -182,11 +195,30 @@ def enable_disable_dynamic_shapes():
 @pytest.fixture(scope="function")
 def enable_graph_decomposition():
     """enable and disable graph-decomposition around each test."""
-    qml.decomposition.enable_graph()
-    try:
+    with qml.decomposition.toggle_graph_ctx(True):
         yield
-    finally:
-        qml.decomposition.disable_graph()
+
+
+@pytest.fixture(scope="function")
+def disable_graph_decomposition():
+    """disable graph-decomposition."""
+    with qml.decomposition.toggle_graph_ctx(False):
+        yield
+
+
+@pytest.fixture(params=[False, True], ids=["graph_disabled", "graph_enabled"])
+def enable_and_disable_graph_decomp(request):
+    """
+    A fixture that parametrizes a test to run twice: once with graph
+    decomposition disabled and once with it enabled.
+
+    It automatically handles the setup (enabling/disabling) before the
+    test runs and the teardown (always disabling) after the test completes.
+
+    """
+    use_graph_decomp = request.param
+    with qml.decomposition.toggle_graph_ctx(use_graph_decomp):
+        yield
 
 
 #######################################################################
@@ -212,6 +244,20 @@ except ImportError as e:
 def pytest_generate_tests(metafunc):
     if jax_available:
         jax.config.update("jax_enable_x64", True)
+
+
+@pytest.fixture(
+    params=[
+        pytest.param("autograd", marks=pytest.mark.autograd),
+        pytest.param("jax", marks=pytest.mark.jax),
+        pytest.param("jax-jit", marks=pytest.mark.jax),
+        pytest.param("torch", marks=pytest.mark.torch),
+    ],
+    scope="function",
+)
+def interface(request):
+    """Automatically parametrize over all interfaces."""
+    yield request.param
 
 
 def pytest_collection_modifyitems(items, config):
@@ -283,8 +329,8 @@ def pytest_runtest_setup(item):
     for b in marks:
         if b == "all_interfaces":
             required_interfaces = {"torch", "jax"}
-            for interface in required_interfaces:
-                if interface not in allowed_interfaces:
+            for _interface in required_interfaces:
+                if _interface not in allowed_interfaces:
                     pytest.skip(
                         f"\nTest {item.nodeid} only runs with {allowed_interfaces} interfaces(s) but {b} interface provided",
                     )

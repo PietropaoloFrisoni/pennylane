@@ -19,7 +19,6 @@ from collections.abc import Callable
 from functools import partial
 
 import numpy as np
-from networkx import MultiDiGraph
 
 from pennylane import ops
 from pennylane.measurements import SampleMP, sample
@@ -47,7 +46,6 @@ from .utils import (
 )
 
 
-# pylint: disable=too-many-positional-arguments
 def _cut_circuit_mc_expand(
     tape: QuantumScript,
     classical_processing_fn: Callable | None = None,
@@ -58,7 +56,7 @@ def _cut_circuit_mc_expand(
 ) -> tuple[QuantumScriptBatch, PostprocessingFn]:
     """Main entry point for expanding operations in sample-based tapes until
     reaching a depth that includes :class:`~.WireCut` operations."""
-    # pylint: disable=unused-argument, too-many-arguments
+    # pylint: disable=unused-argument
 
     def processing_fn(res):
         return res[0]
@@ -66,7 +64,6 @@ def _cut_circuit_mc_expand(
     return [_qcut_expand_fn(tape, max_depth, auto_cutter)], processing_fn
 
 
-# pylint: disable=too-many-positional-arguments
 @partial(transform, expand_transform=_cut_circuit_mc_expand)
 def cut_circuit_mc(
     tape: QuantumScript,
@@ -125,10 +122,9 @@ def cut_circuit_mc(
 
     .. code-block:: python
 
-        from functools import partial
         dev = qml.device("default.qubit", wires=2)
 
-        @partial(qml.set_shots, shots=1000)
+        @qml.set_shots(shots=1000)
         @qml.cut_circuit_mc
         @qml.qnode(dev)
         def circuit(x):
@@ -171,9 +167,7 @@ def cut_circuit_mc(
 
     .. code-block:: python
 
-        from functools import partial
-
-        @partial(qml.cut_circuit_mc, auto_cutter=True)
+        @qml.cut_circuit_mc(auto_cutter=True)
         @qml.qnode(dev)
         def circuit(x):
             qml.RX(0.89, wires=0)
@@ -393,14 +387,13 @@ def cut_circuit_mc(
 
         .. code-block::
 
-            from functools import partial
             dev = qml.device("default.qubit", wires=2)
 
             def observable(bitstring):
                 return (-1) ** np.sum(bitstring)
 
-            @partial(qml.set_shots, shots=10000)
-            @partial(qml.cut_circuit_mc, classical_processing_fn=observable)
+            @qml.set_shots(shots=10000)
+            @qml.cut_circuit_mc(classical_processing_fn=observable)
             @qml.qnode(dev)
             def circuit(x):
                 qml.RX(0.89, wires=0)
@@ -421,7 +414,7 @@ def cut_circuit_mc(
         >>> circuit(x)
         tensor(-0.776, requires_grad=True)
     """
-    # pylint: disable=unused-argument, too-many-arguments
+    # pylint: disable=unused-argument
 
     if len(tape.measurements) != 1:
         raise ValueError(
@@ -554,7 +547,7 @@ MC_MEASUREMENTS = [
 
 
 def expand_fragment_tapes_mc(
-    tapes: QuantumScriptBatch, communication_graph: MultiDiGraph, shots: int, seed=None
+    tapes: QuantumScriptBatch, communication_graph, shots: int, seed=None
 ) -> tuple[QuantumScriptBatch, np.ndarray]:
     """
     Expands fragment tapes into a sequence of random configurations of the contained pairs of
@@ -609,39 +602,37 @@ def expand_fragment_tapes_mc(
     We can then expand over the measurement and preparation nodes to generate random
     configurations using:
 
-    .. code-block:: python
-
-        >>> configs, settings = qml.qcut.expand_fragment_tapes_mc(tapes, communication_graph, 3)
-        >>> print(settings)
-        [[1 6 2]]
-        >>> for i, (c1, c2) in enumerate(zip(configs[0], configs[1])):
-        ...     print(f"config {i}:")
-        ...     print(c1.draw())
-        ...     print("")
-        ...     print(c2.draw())
-        ...     print("")
-        ...
-
-        config 0:
-        0: ──H─╭●─┤  Sample[|1⟩⟨1|]
-        1: ────╰X─┤  Sample[Z]
-
-        1: ──I─╭●─┤  Sample[|1⟩⟨1|]
-        2: ────╰X─┤  Sample[|1⟩⟨1|]
-
-        config 1:
-        0: ──H─╭●─┤  Sample[|1⟩⟨1|]
-        1: ────╰X─┤  Sample[Y]
-
-        1: ──H──S─╭●─┤  Sample[|1⟩⟨1|]
-        2: ───────╰X─┤  Sample[|1⟩⟨1|]
-
-        config 2:
-        0: ──H─╭●─┤  Sample[|1⟩⟨1|]
-        1: ────╰X─┤  Sample[Y]
-
-        1: ──X──H──S─╭●─┤  Sample[|1⟩⟨1|]
-        2: ──────────╰X─┤  Sample[|1⟩⟨1|]
+    >>> configs, settings = qml.qcut.expand_fragment_tapes_mc(tapes, communication_graph, 3)
+    >>> print(settings)
+    [[1 6 2]]
+    >>> for i, (c1, c2) in enumerate(zip(configs[0], configs[1])):
+    ...     print(f"config {i}:")
+    ...     print(c1.draw())
+    ...     print("")
+    ...     print(c2.draw())
+    ...     print("")
+    ...
+    <BLANKLINE>
+    config 0:
+    0: ──H─╭●─┤  Sample[|1⟩⟨1|]
+    1: ────╰X─┤  Sample[Z]
+    <BLANKLINE>
+    1: ──I─╭●─┤  Sample[|1⟩⟨1|]
+    2: ────╰X─┤  Sample[|1⟩⟨1|]
+    <BLANKLINE>
+    config 1:
+    0: ──H─╭●─┤  Sample[|1⟩⟨1|]
+    1: ────╰X─┤  Sample[Y]
+    <BLANKLINE>
+    1: ──H──S─╭●─┤  Sample[|1⟩⟨1|]
+    2: ───────╰X─┤  Sample[|1⟩⟨1|]
+    <BLANKLINE>
+    config 2:
+    0: ──H─╭●─┤  Sample[|1⟩⟨1|]
+    1: ────╰X─┤  Sample[Y]
+    <BLANKLINE>
+    1: ──X──H──S─╭●─┤  Sample[|1⟩⟨1|]
+    2: ──────────╰X─┤  Sample[|1⟩⟨1|]
 
     """
     pairs = [e[-1] for e in communication_graph.edges.data("pair")]
